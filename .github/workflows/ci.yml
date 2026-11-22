@@ -1,0 +1,21 @@
+name: Verify WAV frame edits
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  render:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - run: dotnet build src -c Release
+      - run: python -m unittest -v
+      - run: python demo.py
