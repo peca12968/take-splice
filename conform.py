@@ -56,8 +56,15 @@ def format_time(ms):
     return f"{ms // 3600000:02}:{ms // 60000 % 60:02}:{ms // 1000 % 60:02}.{ms % 1000:03}"
 
 
+@dataclass(frozen=True)
+class Alignment:
+    rate: int
+    delay: int
+
+
 class Track:
-    def __init__(self, cues):
+    def __init__(self, cues, alignment=None):
+        self.alignment = alignment
         self.cues = cues
         self.starts = [cue.start for cue in cues]
         self.latest_ends = []
@@ -72,7 +79,7 @@ class Track:
         return range(first, stop)
 
 
-def read_track(path):
+def read_track(path, alignment=None):
     text = path.read_text(encoding="utf-8-sig").rstrip("\n")
     blocks = re.split(r"\n{2,}", text)
     if not re.fullmatch(r"WEBVTT(?:[ \t][^\n]*)?", blocks[0]) or "-->" in blocks[0]:
@@ -96,7 +103,7 @@ def read_track(path):
         if end <= start or (cues and start < cues[-1].start):
             raise ValueError(f"{path}: reversed or out-of-order timing in block {number}")
         cues.append(Cue(start, end, payload, settings))
-    return Track(cues)
+    return Track(cues, alignment)
 
 
 def unique_keys(pairs):
@@ -139,14 +146,21 @@ def conform(manifest, tracks):
             raise ValueError(f"clip {number}: missing caption mapping for {source!r}")
         track = tracks[source]
         if track is not None:
-            for i in track.candidates(start, end, rate):
+            delay = 0
+            if track.alignment is not None:
+                if rate != track.alignment.rate:
+                    raise ValueError(f"clip {number}: alignment and edit have different sample rates")
+                delay = track.alignment.delay
+            # Convert the comparison-channel edit to the caption clock before intersecting.
+            left_frame, right_frame = start - delay, end - delay
+            for i in track.candidates(left_frame, right_frame, rate):
                 cue = track.cues[i]
                 # All boundaries use units of 1/(1000*rate) seconds until final output.
-                left = max(start * 1000, cue.start * rate)
-                right = min(end * 1000, cue.end * rate)
+                left = max(left_frame * 1000, cue.start * rate)
+                right = min(right_frame * 1000, cue.end * rate)
                 if left >= right:
                     continue
-                shift = (offset - start) * 1000
+                shift = (offset - left_frame) * 1000
                 begin, finish = ceil_div(left + shift, rate), ceil_div(right + shift, rate)
                 if begin == finish:
                     sub_ms += 1
@@ -164,15 +178,42 @@ def conform(manifest, tracks):
     return output, stats
 
 
+def read_alignment(path):
+    report = read_json(path)
+    if not isinstance(report, dict):
+        raise ValueError(f"{path}: expected Channel Lag comparison report")
+    clocks = []
+    for name in ("reference", "comparison"):
+        entry = report.get(name)
+        if not isinstance(entry, dict) or entry.get("status") != "matched":
+            raise ValueError(f"{path}: expected a matched {name} channel")
+        candidates = entry.get("candidates")
+        if not isinstance(candidates, list) or not candidates:
+            raise ValueError(f"{path}: missing {name} candidate")
+        clocks.append((integer(entry, "sample_rate", 1), integer(entry, "channel", 1),
+                       integer(candidates[0], "frame", 0)))
+    (rate, channel, start), (other_rate, other_channel, end) = clocks
+    delay = report.get("delay_frames")
+    if (rate != other_rate or channel == other_channel or type(delay) is not int or delay != end - start):
+        raise ValueError(f"{path}: inconsistent channel delay report")
+    return Alignment(rate, delay)
+
+
 def load_tracks(path):
     mapping = read_json(path)
     if not isinstance(mapping, dict):
         raise ValueError("expected an object mapping audio sources to subtitle files or null")
     tracks = {}
     for source, filename in mapping.items():
+        alignment = None
+        if isinstance(filename, dict):
+            if set(filename) != {"file", "alignment"} or not all(isinstance(v, str) and v for v in filename.values()):
+                raise ValueError(f"expected file and alignment paths for {source!r}")
+            alignment = read_alignment(path.parent / filename["alignment"])
+            filename = filename["file"]
         if filename is not None and (not isinstance(filename, str) or not filename):
             raise ValueError(f"invalid caption filename for {source!r}")
-        tracks[source] = read_track(path.parent / filename) if filename is not None else None
+        tracks[source] = read_track(path.parent / filename, alignment) if filename is not None else None
     return tracks
 
 

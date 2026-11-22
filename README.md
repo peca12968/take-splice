@@ -38,6 +38,20 @@ python browser_check.py google-chrome
 
 ## 如何處理跨幀邊界
 
+### 先校正聲道之間的時間差
+
+如果字幕是聽參考聲道打的，而成品使用另一條有固定延遲的聲道，可以在對照檔為該來源指定字幕與 Channel Lag 報告。兩個路徑均相對於對照檔。以參考聲道為 1、成品聲道為 2 的量測為例：
+
+```json
+{"stereo.wav": {"file": "source.vtt", "alignment": "measured.json"}}
+```
+
+先用 Channel Lag 的 `--channel 1 --compare-channel 2` 產生 JSON 報告。程式核對兩個聲道的定位狀態、取樣率與幀索引，使用帶正負號的幀差平移來源字幕，再按每一刀的幀區間裁切。無法判定唯一延遲時會終止匯出。這項對時適用於固定延遲。[量測工具](https://github.com/peca12968/channel-lag)
+
+整合範例使用同一份 48 kHz 立體聲錄音，先量到聲道 2 晚 417 幀，再用 Take Splice 剪出兩段。原字幕 1.000–1.100 秒，在第一段落到 9–109 毫秒，在重複使用的片段落到 300–326 毫秒。交換聲道後得到 −417 幀，兩段分別顯示於 0–92 與 300–308 毫秒。可安裝 Channel Lag 的 requirements.txt 並以 Release 組態建置 Take Splice，再從本專案執行 `python alignment_demo.py ../channel-lag ../take-splice`。[跨專案驗證](alignment_demo.py)
+
+### 裁切與毫秒刻度
+
 時間區間含起點、排除終點。工具先在整數尺度上算出來源字幕與所選幀區間的交集，平移到輸出後才把兩端都向上取到整數毫秒。這使每一個整數毫秒所顯示的字幕與原音訊對得上。若一段交集完全落在兩個毫秒刻度之間，會在 `sub_ms_omitted` 計數中列入一次。WebVTT 的時間解析度為毫秒，因此最後一條字幕的結束時間可能比音訊結束多出不到 1 毫秒。[實作](conform.py)
 
 測試以 120 份合成剪輯紀錄，逐毫秒從輸出音訊的位置反查來源，使用有理數運算核對當時應顯示的所有字幕。跨專案測試另外執行固定版本的 C# 剪輯器，實際產生 WAV 與紀錄，再執行字幕 CLI 比對輸出檔。Windows 與 Linux 執行相同流程。[逐毫秒測試](test_conform.py) · [跨專案驗證](integration.py)

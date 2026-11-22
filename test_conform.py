@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 
-from conform import Cue, Track, conform, read_track
+from conform import Alignment, Cue, Track, conform, read_track
 
 
 ROOT = Path(__file__).resolve().parent
@@ -67,7 +67,8 @@ class ConformTests(unittest.TestCase):
                 layouts = ("", "line:20%,center align:left", "vertical:lr position:80%,center")
                 cues = sorted((Cue(t, t+rng.randint(1, 55), f"{source}-{i}", layouts[i % 3]) for i, t in
                                enumerate(rng.choices(range(75), k=9))), key=lambda c: c.start)
-                tracks[source] = Track(cues)
+                alignment = Alignment(rate, rng.randint(-rate//50, rate//50)) if case % 2 else None
+                tracks[source] = Track(cues, alignment)
             clips, offset = [], 0
             for _ in range(rng.randint(2, 8)):
                 start = rng.randrange(rate//12)
@@ -87,6 +88,8 @@ class ConformTests(unittest.TestCase):
                         track = tracks[clip["source"]]
                         if track and clip["start"] <= source_frame < clip["end"]:
                             source_ms = source_frame * 1000 / rate
+                            if track.alignment:
+                                source_ms -= Fraction(track.alignment.delay * 1000, rate)
                             expected.update((c.text, c.settings) for c in track.cues if c.start <= source_ms < c.end)
                     self.assertEqual(Counter((c, s) for _, a, b, c, s in actual if a <= ms < b), expected)
 
@@ -98,6 +101,21 @@ class ConformTests(unittest.TestCase):
         text, stats = conform(manifest, {"quiet": None, "a": track})
         self.assertEqual(parse_export(text), [("clip-5-cue-1", 1, 2, "text", "")])
         self.assertEqual(stats["sub_ms_omitted"], 3)
+
+    def test_invalid_measurement_produces_no_subtitles(self):
+        edit, mapping, measured, out = (self.root / name for name in ("edit", "map", "lag", "out"))
+        edit.write_text(json.dumps({"format": {"sample_rate": 48000}, "frames": 48, "clips": [
+            {"source": "take", "start": 0, "end": 48, "output_start": 0}]}), encoding="utf-8")
+        mapping.write_text(json.dumps({"take": {"file": "source.vtt", "alignment": "lag"}}), encoding="utf-8")
+        (self.root / "source.vtt").write_text("WEBVTT\n\n", encoding="utf-8")
+        ref = {"channel": 1, "status": "matched", "sample_rate": 48000, "candidates": [{"frame": 10}]}
+        other = dict(ref, channel=2, candidates=[{"frame": 11}])
+        for a, b, delay in [(ref, other, True), (ref, other, -1), (ref, dict(other, channel=1), 1),
+                            (ref, dict(other, candidates=[]), 1), (ref, dict(other, status="missing"), 1),
+                            (dict(ref, sample_rate=44100), dict(other, sample_rate=44100), 1)]:
+            measured.write_text(json.dumps({"reference": a, "comparison": b, "delay_frames": delay}), encoding="utf-8")
+            self.assertEqual(self.cli(edit, mapping, out).returncode, 2)
+            self.assertFalse(out.exists())
 
     def test_bom_comments_multiline_and_invalid_blocks(self):
         path = self.root / "caption.vtt"
