@@ -1,0 +1,26 @@
+name: Verify caption conform
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  captions:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: python -m unittest -v
+      - uses: actions/checkout@v7
+        with:
+          repository: peca12968/take-splice
+          ref: 9774ce1ed2a2fd7db3d9efa07931b9fb2f6911f1
+          path: upstream
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet build upstream/src -c Release
+      - run: python integration.py upstream
