@@ -2,6 +2,7 @@
 import argparse
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
+from decimal import Decimal
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,33 @@ class Cue:
     start: int
     end: int
     text: str
+    settings: str = ""
+
+
+PERCENT = r"(?P<percent>[0-9]+(?:\.[0-9]+)?)%"
+LAYOUT = {
+    "vertical": re.compile(r"rl|lr"),
+    "line": re.compile(rf"(?:{PERCENT}|-?[0-9]+)(?:,(?:start|center|end))?"),
+    "position": re.compile(rf"{PERCENT}(?:,(?:line-left|center|line-right))?"),
+    "size": re.compile(PERCENT),
+    "align": re.compile(r"start|center|end|left|right"),
+}
+
+
+def cue_settings(raw, path, number):
+    seen = set()
+    tokens = re.findall(r"[^ \t]+", raw)
+    for token in tokens:
+        name, _, value = token.partition(":")
+        pattern = LAYOUT.get(name)
+        match = pattern.fullmatch(value) if pattern else None
+        if not match or name in seen:
+            raise ValueError(f"{path}: invalid or repeated setting {token!r} in block {number}")
+        percent = match.groupdict().get("percent")
+        if percent is not None and Decimal(percent) > 100:
+            raise ValueError(f"{path}: percentage out of range in {token!r} in block {number}")
+        seen.add(name)
+    return " ".join(tokens)
 
 
 def timestamp(value):
@@ -57,16 +85,17 @@ def read_track(path):
         index = 0 if "-->" in lines[0] else 1
         if len(lines) <= index + 1:
             raise ValueError(f"{path}: invalid text cue in block {number}")
-        timing = re.fullmatch(r"(\S+)[ \t]+-->[ \t]+(\S+)", lines[index])
+        timing = re.fullmatch(r"(\S+)[ \t]+-->[ \t]+(\S+)([ \t].*)?", lines[index])
         if not timing:
-            raise ValueError(f"{path}: expected plain cue timings in block {number}")
-        start, end = map(timestamp, timing.groups())
+            raise ValueError(f"{path}: invalid cue timings in block {number}")
+        start, end = map(timestamp, timing.group(1, 2))
+        settings = cue_settings(timing.group(3) or "", path, number)
         payload = "\n".join(lines[index+1:])
         if "<" in payload or "-->" in payload or "\x00" in payload:
             raise ValueError(f"{path}: expected plain caption text in block {number}")
         if end <= start or (cues and start < cues[-1].start):
             raise ValueError(f"{path}: reversed or out-of-order timing in block {number}")
-        cues.append(Cue(start, end, payload))
+        cues.append(Cue(start, end, payload, settings))
     return Track(cues)
 
 
@@ -122,7 +151,10 @@ def conform(manifest, tracks):
                 if begin == finish:
                     sub_ms += 1
                     continue
-                blocks.append(f"clip-{number}-cue-{i+1}\n{format_time(begin)} --> {format_time(finish)}\n{cue.text}")
+                timing = f"{format_time(begin)} --> {format_time(finish)}"
+                if cue.settings:
+                    timing += " " + cue.settings
+                blocks.append(f"clip-{number}-cue-{i+1}\n{timing}\n{cue.text}")
                 emitted += 1
         offset += end - start
     if offset != total:

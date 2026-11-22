@@ -1,11 +1,11 @@
 WEBVTT
 
 clip-1-cue-2
-00:00:00.000 --> 00:00:00.220
+00:00:00.000 --> 00:00:00.220 line:15% position:10% size:38% align:start
 高音
 
 clip-1-cue-3
-00:00:00.200 --> 00:00:00.450
+00:00:00.200 --> 00:00:00.450 line:80% position:90% size:32% align:end
 延音
 
 clip-2-cue-1
@@ -17,9 +17,9 @@ clip-2-cue-2
 節拍
 
 clip-3-cue-2
-00:00:01.001 --> 00:00:01.221
+00:00:01.001 --> 00:00:01.221 line:15% position:10% size:38% align:start
 高音
 
 clip-3-cue-3
-00:00:01.201 --> 00:00:01.251
+00:00:01.201 --> 00:00:01.251 line:80% position:90% size:32% align:end
 延音

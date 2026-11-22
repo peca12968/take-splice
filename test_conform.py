@@ -26,9 +26,10 @@ def parse_export(text):
     result = []
     for block in blocks[1:]:
         identity, times, caption = block.split("\n", 2)
-        a, b = map(as_ms, times.split(" --> "))
+        start, _, end, *layout = times.split()
+        a, b = map(as_ms, [start, end])
         assert a < b
-        result.append((identity, a, b, caption))
+        result.append((identity, a, b, caption, " ".join(layout)))
     assert len(set(r[0] for r in result)) == len(result)
     assert [r[1] for r in result] == sorted(r[1] for r in result)
     return result
@@ -63,7 +64,8 @@ class ConformTests(unittest.TestCase):
             rate = rng.choice((8000, 11025, 44100, 48000))
             tracks = {"silent": None}
             for source in ("a", "b"):
-                cues = sorted((Cue(t, t+rng.randint(1, 55), f"{source}-{i}") for i, t in
+                layouts = ("", "line:20%,center align:left", "vertical:lr position:80%,center")
+                cues = sorted((Cue(t, t+rng.randint(1, 55), f"{source}-{i}", layouts[i % 3]) for i, t in
                                enumerate(rng.choices(range(75), k=9))), key=lambda c: c.start)
                 tracks[source] = Track(cues)
             clips, offset = [], 0
@@ -85,8 +87,8 @@ class ConformTests(unittest.TestCase):
                         track = tracks[clip["source"]]
                         if track and clip["start"] <= source_frame < clip["end"]:
                             source_ms = source_frame * 1000 / rate
-                            expected.update(c.text for c in track.cues if c.start <= source_ms < c.end)
-                    self.assertEqual(Counter(c for _, a, b, c in actual if a <= ms < b), expected)
+                            expected.update((c.text, c.settings) for c in track.cues if c.start <= source_ms < c.end)
+                    self.assertEqual(Counter((c, s) for _, a, b, c, s in actual if a <= ms < b), expected)
 
     def test_submillisecond_slices_and_null_track(self):
         clips = [{"source": key, "start": i, "end": i+1, "output_start": i}
@@ -94,7 +96,7 @@ class ConformTests(unittest.TestCase):
         manifest = {"clips": clips, "frames": 5, "format": {"sample_rate": 4000}}
         track = Track([Cue(0, 10, "text")])
         text, stats = conform(manifest, {"quiet": None, "a": track})
-        self.assertEqual(parse_export(text), [("clip-5-cue-1", 1, 2, "text")])
+        self.assertEqual(parse_export(text), [("clip-5-cue-1", 1, 2, "text", "")])
         self.assertEqual(stats["sub_ms_omitted"], 3)
 
     def test_bom_comments_multiline_and_invalid_blocks(self):
@@ -103,10 +105,25 @@ class ConformTests(unittest.TestCase):
         path.write_bytes(body.encode("utf-8-sig"))
         self.assertEqual(read_track(path).cues, [Cue(1000, 2000, "第一行\n第二行")])
         for old, new in [("WEBVTT", "VTT"), ("00:02.000", "00:01.000"),
-                         ("00:02.000", "00:02.000 align:left"), ("第一行", "<00:01.500>第一行")]:
+                         ("00:02.000", "00:02.000 align:middle"), ("第一行", "<00:01.500>第一行")]:
             path.write_bytes(body.replace(old, new).encode("utf-8"))
             with self.assertRaises(ValueError):
                 read_track(path)
+
+    def test_layout_grammar_and_rejected_settings(self):
+        path = self.root / "layout.vtt"
+        def parse(settings):
+            path.write_text(f"WEBVTT\n\n00:00.000 --> 00:01.000 {settings}\nx", encoding="utf-8")
+            return read_track(path).cues[0].settings
+
+        for layout in ("vertical:rl line:-1,end position:0%,line-left size:100.000% align:right",
+                       "line:00.125%,center position:99.9%,line-right", "line:0,start vertical:lr"):
+            self.assertEqual(parse(layout.replace(" ", "\t  ")), layout)
+        for invalid in ("line:+2", "line:1.5", "line:-1%,end", "align:left align:right",
+                        "size:100.00000000000000000001%", "position:50%,end", "region:lower",
+                        "vertical:tb", "line:1,auto", "size:.5%", "align:left\u00a0size:20%"):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "block 1"):
+                parse(invalid)
 
     def test_invalid_late_clip_or_unmapped_source_creates_no_output(self):
         m = json.loads((ROOT / "examples/edit.json").read_bytes())

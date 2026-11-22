@@ -20,11 +20,21 @@ python -m unittest -v
 | 低音 | 500–748 |
 | 節拍 | 798–1,001 |
 
+### 兩句同時出現時，保留哪一句放在畫面上方
+
+在第 210 毫秒，「高音」和「延音」同時出現。「高音」設定在畫面高度的 15%，字幕框寬 38%，文字靠起點對齊。「延音」設定在高度的 80%，框寬 32%，文字靠終點對齊。到了第 1,210 毫秒，重播片段再度出現這兩句，兩組定位與對齊設定都跟著各自的字幕。[來源字幕](examples/first.vtt) · [剪輯後字幕](examples/edited.vtt)
+
+可用本機 Chrome 核對播放器實際讀到的設定。將下列命令中的 `google-chrome` 換成本機 Chrome 的執行檔路徑。檢查程式會執行字幕 CLI，將輸出交給瀏覽器原生文字軌解析，再比對兩個時間點涵蓋的字幕 ID、文字、行位置、水平位置、寬度與對齊。[瀏覽器驗證](browser_check.py)
+
+```sh
+python browser_check.py google-chrome
+```
+
 ## 使用自己的音訊與字幕
 
 第一個參數是 Take Splice 成功剪輯後寫到標準輸出的 JSON，包含取樣率、來源幀區間與每段在輸出中的起始幀。第二個參數是字幕對照檔，鍵使用剪輯紀錄的來源名稱，值是相對於對照檔的字幕路徑。無字幕的來源可明確設為 null。第三個參數需使用新的輸出檔名；工具在輸出目錄透過硬連結發布完成的檔案。[剪輯紀錄](examples/edit.json) · [對照檔](examples/tracks.json)
 
-來源支援 UTF-8 WebVTT 的純文字字幕、選用的 cue ID、多行文字與 NOTE 註解。輸出 ID 依片段與來源 cue 編號產生，方便追查同一句字幕的多次出現。含時間標籤的逐字字幕、定位設定與樣式區塊超出此版本的支援範圍。[WebVTT 規格](https://www.w3.org/TR/webvtt1/)
+來源支援 UTF-8 WebVTT 的純文字字幕、選用的 cue ID、多行文字與 NOTE 註解。輸出 ID 依片段與來源 cue 編號產生，方便追查同一句字幕的多次出現。每條字幕可使用 `line`、`position`、`size`、`align` 與 `vertical`。例如 `line:-1,end` 採用負行號，`position:80%,center` 以字幕框中心定位。遇到重複設定、無效值或百分比超過 100%，CLI 會指出輸入檔與字幕區塊。含時間標籤的逐字字幕、REGION 與 STYLE 區塊仍超出支援範圍。[WebVTT 字幕設定規格](https://www.w3.org/TR/webvtt1/#cue-settings)
 
 ## 如何處理跨幀邊界
 
