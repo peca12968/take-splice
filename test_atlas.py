@@ -28,8 +28,9 @@ class AtlasTests(unittest.TestCase):
         self.root = Path(temp.name)
         self.bundle = self.root / "atlas.zip"
 
-    def pack(self, files, size, ok=True, dest=None):
-        p = subprocess.run([self.exe, "-out", dest or self.bundle, "-size", str(size), *files],
+    def pack(self, files, size, ok=True, dest=None, dedupe=False):
+        flags = ["-dedupe"] if dedupe else []
+        p = subprocess.run([self.exe, *flags, "-out", dest or self.bundle, "-size", str(size), *files],
                            capture_output=True)
         self.assertEqual(p.returncode, 0 if ok else 1, p.stderr)
         if ok:
@@ -60,6 +61,79 @@ class AtlasTests(unittest.TestCase):
         self.assertEqual(m["frames"][0]["offset"], [1,0])
         with ZipFile(self.bundle) as archive, archive.open(m["pages"][0]) as raw, Image.open(raw) as page:
             self.assertEqual(page.getpixel((1,1)), (0x71,0xBE,0x01,0x01))
+        eight_bit = self.root / "rgba8.png"
+        Image.new("RGBA", (1, 1), (0x71, 0xBE, 0x01, 0x01)).save(eight_bit)
+        shared = self.pack([source, eight_bit], 3, dedupe=True)
+        self.assertEqual(len(shared["pages"]), 1)
+        self.assertEqual([f["offset"] for f in shared["frames"]], [[1, 0], [0, 0]])
+
+    def test_dedupe_replays_all_nine_frames_from_one_small_page(self):
+        for enabled, pages in ((False, 8), (True, 1)):
+            directory = self.root / str(enabled)
+            result = demo(self.exe, directory, size=16, dedupe=enabled)
+            self.assertEqual((result["frames"], result["pages"], result["atlas_pixels"]), (9, pages, pages*256))
+        with Image.open(self.root / "False/replayed.png") as separate, Image.open(self.root / "True/replayed.png") as shared:
+            self.assertEqual(shared.tobytes(), separate.tobytes())
+        with ZipFile(self.root / "True/parcel.zip") as archive:
+            frames = json.loads(archive.read("manifest.json"))["frames"]
+            self.assertEqual({(f["page"], *f["atlas"]) for f in frames[:-1]}, {(0, 1, 1, 9, 11)})
+            self.assertEqual(len({tuple(f["offset"]) for f in frames[:-1]}), 8)
+            self.assertEqual(frames[-1]["page"], -1)
+
+    def test_dedupe_equivalence_classes_and_reversed_input_order(self):
+        rng = random.Random(7391)
+        tiles = []
+        for _ in range(12):
+            tile = Image.new("RGBA", (5, 5))
+            for y in range(5):
+                for x in range(5):
+                    if x != y or x == 0:
+                        tile.putpixel((x, y), tuple(rng.randrange(256) for _ in range(3)) + (rng.choice([1, 255]),))
+            tiles.append(tile)
+        # Identical byte sequence arranged into different shapes, and two one-byte differences.
+        for size, color in [((2, 3), (42, 80, 90, 1)), ((3, 2), (42, 80, 90, 1)),
+                            ((2, 3), (43, 80, 90, 1)), ((2, 3), (42, 80, 90, 2))]:
+            tiles.append(Image.new("RGBA", size, color))
+        sources = {}
+        for copy in range(4):
+            for index, tile in enumerate(tiles):
+                x, y = rng.randrange(5), rng.randrange(5)
+                canvas = Image.new("RGBA", (x + tile.width + copy, y + tile.height + 3))
+                canvas.paste(tile, (x, y))
+                name = self.root / f"{copy}-{index:02}.png"
+                sources[name] = canvas.copy()
+                # Invisible RGB varies even inside the crop.
+                for py in range(canvas.height):
+                    for px in range(canvas.width):
+                        if canvas.getpixel((px, py))[3] == 0:
+                            canvas.putpixel((px, py), (copy * 23, px, py, 0))
+                canvas.save(name)
+        manifest = self.pack(sources, 10, dedupe=True)
+        self.assertGreater(len(manifest["pages"]), 1)
+        locations = {}
+        with ZipFile(self.bundle) as archive:
+            pages = []
+            for name in manifest["pages"]:
+                with archive.open(name) as stream, Image.open(stream) as page:
+                    pages.append(page.convert("RGBA"))
+            self.assertEqual(len(manifest["frames"]), len(sources))
+            for f in manifest["frames"]:
+                original = sources[self.root / f["name"]]
+                box = original.getchannel("A").getbbox()
+                crop = original.crop(box)
+                key = (crop.size, crop.tobytes())
+                loc = (f["page"], *f["atlas"])
+                self.assertEqual(locations.setdefault(key, loc), loc)
+                p, x, y, w, h = loc
+                restored = Image.new("RGBA", tuple(f["source_size"]))
+                restored.paste(pages[p].crop((x, y, x+w, y+h)), tuple(f["offset"]))
+                self.assertEqual(restored.size, original.size)
+                self.assertEqual(restored.tobytes(), original.tobytes())
+        self.assertEqual(len(set(locations.values())), len(tiles))
+        self.assertEqual(len(locations), len(tiles))
+        first = self.bundle.read_bytes()
+        self.pack(reversed(list(sources)), 10, dedupe=True)
+        self.assertEqual(first, self.bundle.read_bytes())
 
     def test_crops_gutters_and_reconstruction_across_pages(self):
         rng = random.Random(9031)

@@ -8,7 +8,7 @@ from zipfile import ZipFile
 from PIL import Image, ImageDraw
 
 
-def demo(executable, directory):
+def demo(executable, directory, size=48, dedupe=False):
     directory.mkdir()
     sources = []
     for i in range(9):
@@ -23,7 +23,9 @@ def demo(executable, directory):
         frame.save(path)
         sources.append(path)
     output = directory / "parcel.zip"
-    subprocess.run([executable, "-size", "48", "-out", output, *sources], check=True, stdout=subprocess.PIPE)
+    flags = ["-dedupe"] if dedupe else []
+    subprocess.run([executable, *flags, "-size", str(size), "-out", output, *sources],
+                   check=True, stdout=subprocess.PIPE)
     strip = Image.new("RGBA", (64 * len(sources), 64))
     with ZipFile(output) as archive:
         manifest = json.loads(archive.read("manifest.json"))
@@ -39,12 +41,14 @@ def demo(executable, directory):
             strip.paste(restored, (64*i, 0))
     strip.save(directory / "replayed.png")
     return {"frames": len(sources), "source_pixels": len(sources)*64*64,
-            "pages": len(manifest["pages"]), "atlas_pixels": len(manifest["pages"])*48*48}
+            "pages": len(manifest["pages"]), "atlas_pixels": len(manifest["pages"])*size*size}
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("executable", type=Path)
     parser.add_argument("new_directory", type=Path)
+    parser.add_argument("--size", type=int, default=48)
+    parser.add_argument("--dedupe", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(demo(args.executable.resolve(), args.new_directory)))
+    print(json.dumps(demo(args.executable.resolve(), args.new_directory, args.size, args.dedupe)))

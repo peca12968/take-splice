@@ -2,6 +2,8 @@ package main
 
 import (
 	"archive/zip"
+	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -108,7 +110,24 @@ func drawWithGutter(page *image.NRGBA, crop *image.NRGBA, left, top int) {
 	}
 }
 
-func build(out io.Writer, sprites []sprite, size int) (Manifest, error) {
+// Record the first matching tile in sorted packing order. A digest narrows the
+// search, but dimensions and RGBA bytes decide whether the tiles can share.
+type tileIndex map[[sha256.Size]byte][]int
+
+func (seen tileIndex) firstMatch(sprites []sprite, i int) int {
+	crop := sprites[i].crop
+	digest := sha256.Sum256(crop.Pix)
+	for _, j := range seen[digest] {
+		prior := sprites[j].crop
+		if crop.Rect == prior.Rect && bytes.Equal(crop.Pix, prior.Pix) {
+			return j
+		}
+	}
+	seen[digest] = append(seen[digest], i)
+	return i
+}
+
+func build(out io.Writer, sprites []sprite, size int, dedupe bool) (Manifest, error) {
 	sort.Slice(sprites, func(i, j int) bool {
 		a, b := sprites[i].frame, sprites[j].frame
 		if a.Atlas[3] != b.Atlas[3] {
@@ -119,7 +138,7 @@ func build(out io.Writer, sprites []sprite, size int) (Manifest, error) {
 		}
 		return a.Name < b.Name
 	})
-	m := Manifest{Version: 1, PageSize: size, Gutter: 1, Pages: []string{}}
+	m := Manifest{Version: 1, PageSize: size, Gutter: 1, Pages: []string{}, Frames: make([]Frame, len(sprites))}
 	z := zip.NewWriter(out)
 	var page *image.NRGBA
 	flush := func() error {
@@ -138,29 +157,37 @@ func build(out io.Writer, sprites []sprite, size int) (Manifest, error) {
 		return nil
 	}
 	x, y, rowHeight := 0, 0, 0
-	for _, s := range sprites {
-		fm := s.frame
-		if s.crop != nil {
-			w, h := fm.Atlas[2]+2, fm.Atlas[3]+2
-			if x+w > size {
-				x, y, rowHeight = 0, y+rowHeight, 0
-			}
-			if y+h > size {
-				if err := flush(); err != nil {
-					return m, err
-				}
-				page = nil
-				x, y, rowHeight = 0, 0, 0
-			}
-			if page == nil {
-				page = image.NewNRGBA(image.Rect(0, 0, size, size))
-			}
-			fm.Page, fm.Atlas[0], fm.Atlas[1] = len(m.Pages), x+1, y+1
-			drawWithGutter(page, s.crop, x+1, y+1)
-			x += w
-			rowHeight = max(rowHeight, h)
+	seen := make(tileIndex)
+	for i, s := range sprites {
+		m.Frames[i] = s.frame
+		fm := &m.Frames[i]
+		if s.crop == nil {
+			continue
 		}
-		m.Frames = append(m.Frames, fm)
+		if dedupe {
+			if j := seen.firstMatch(sprites, i); j != i {
+				fm.Page, fm.Atlas = m.Frames[j].Page, m.Frames[j].Atlas
+				continue
+			}
+		}
+		w, h := fm.Atlas[2]+2, fm.Atlas[3]+2
+		if x+w > size {
+			x, y, rowHeight = 0, y+rowHeight, 0
+		}
+		if y+h > size {
+			if err := flush(); err != nil {
+				return m, err
+			}
+			page = nil
+			x, y, rowHeight = 0, 0, 0
+		}
+		if page == nil {
+			page = image.NewNRGBA(image.Rect(0, 0, size, size))
+		}
+		fm.Page, fm.Atlas[0], fm.Atlas[1] = len(m.Pages), x+1, y+1
+		drawWithGutter(page, s.crop, x+1, y+1)
+		x += w
+		rowHeight = max(rowHeight, h)
 	}
 	if err := flush(); err != nil {
 		return m, err

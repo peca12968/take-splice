@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 )
 
-func pack(paths []string, output string, size int) (Manifest, error) {
+func pack(paths []string, output string, size int, dedupe bool) (Manifest, error) {
 	if len(paths) == 0 || output == "" || size < 3 || size > 4096 {
 		return Manifest{}, errors.New("provide PNG inputs, -out FILE.zip and a page size from 3 to 4096")
 	}
@@ -47,7 +47,7 @@ func pack(paths []string, output string, size int) (Manifest, error) {
 		return Manifest{}, err
 	}
 	defer os.Remove(temp.Name())
-	m, err := build(temp, sprites, size)
+	m, err := build(temp, sprites, size, dedupe)
 	closeErr := temp.Close()
 	if err != nil {
 		return Manifest{}, err
@@ -60,9 +60,10 @@ func pack(paths []string, output string, size int) (Manifest, error) {
 
 func main() {
 	size := flag.Int("size", 256, "width and height of each atlas page")
+	dedupe := flag.Bool("dedupe", false, "share one region for identical normalized crops")
 	output := flag.String("out", "", "destination ZIP containing PNG pages and a JSON manifest")
 	flag.Parse()
-	m, err := pack(flag.Args(), *output, *size)
+	m, err := pack(flag.Args(), *output, *size, *dedupe)
 	if err == nil {
 		err = json.NewEncoder(os.Stdout).Encode(m)
 	}
