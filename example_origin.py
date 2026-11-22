@@ -31,6 +31,21 @@ def partial(start, end=len(DATA) - 1, **kwargs):
     return reply(206, DATA[start:end+1], content_range=f"bytes {start}-{end}/{len(DATA)}", **kwargs)
 
 
+def stall_body(release, start=0, stop=PREFIX):
+    """Keep the connection open after the headers and selected body bytes."""
+    def serve(handler):
+        handler.send_response(206 if start else 200)
+        handler.send_header("ETag", TAG)
+        handler.send_header("Content-Length", str(len(DATA) - start))
+        if start:
+            handler.send_header("Content-Range", f"bytes {start}-{len(DATA)-1}/{len(DATA)}")
+        handler.end_headers()
+        handler.wfile.write(DATA[start:stop])
+        handler.wfile.flush()
+        release.wait(30)
+    return serve
+
+
 @contextmanager
 def origin(*responses):
     requests = []

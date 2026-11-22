@@ -9,7 +9,8 @@ internal sealed record Checkpoint(string Resource, string Digest, string ETag, l
 
 internal static class Download
 {
-    public static async Task<Receipt> Run(HttpClient client, Uri uri, string destination, string digest, CancellationToken ct)
+    public static async Task<Receipt> Run(HttpClient client, Uri uri, string destination, string digest,
+        int idleTimeoutMs, CancellationToken ct)
     {
         var directory = destination + ".range-fetch";
         Directory.CreateDirectory(directory);
@@ -84,7 +85,7 @@ internal static class Download
             }
             else throw new HttpRequestException($"Unexpected HTTP status {(int)response.StatusCode}.");
 
-            long copied = await CopySegment(response.Content, part, offset, segmentBytes, ct);
+            long copied = await CopySegment(response.Content, part, offset, segmentBytes, idleTimeoutMs, ct);
             downloaded += copied;
             offset += copied;
             if (response.StatusCode == HttpStatusCode.PartialContent && offset < saved!.Total) continue;
@@ -122,7 +123,8 @@ internal static class Download
         File.Move(temp, path, true);
     }
 
-    private static async Task<long> CopySegment(HttpContent content, string path, long offset, long? expected, CancellationToken ct)
+    private static async Task<long> CopySegment(HttpContent content, string path, long offset, long? expected,
+        int idleTimeoutMs, CancellationToken ct)
     {
         using var output = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.None);
         if (output.Length != offset) throw new InvalidDataException("Staging length changed.");
@@ -131,7 +133,7 @@ internal static class Download
         var buffer = new byte[64 * 1024];
         long copied = 0;
         int count;
-        while ((count = await input.ReadAsync(buffer, ct)) > 0)
+        while ((count = await ReadWithIdleTimeout(input, buffer, idleTimeoutMs, ct)) > 0)
         {
             if (expected.HasValue && count > expected.Value - copied)
             {
@@ -144,6 +146,21 @@ internal static class Download
         if (expected.HasValue && copied != expected.Value)
             throw new EndOfStreamException("Response ended before the declared length.");
         return copied;
+    }
+
+    private static async ValueTask<int> ReadWithIdleTimeout(Stream input, Memory<byte> buffer,
+        int idleTimeoutMs, CancellationToken ct)
+    {
+        using var read = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        read.CancelAfter(idleTimeoutMs);
+        try
+        {
+            return await input.ReadAsync(buffer, read.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && read.IsCancellationRequested)
+        {
+            throw new TimeoutException($"No response body data received for {idleTimeoutMs} ms.");
+        }
     }
 
     private static async Task<bool> Matches(string path, string digest, CancellationToken ct)

@@ -4,9 +4,10 @@ from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
 from threading import Event
+from time import monotonic, sleep
 import unittest
 
-from example_origin import DATA, PREFIX, TAG, digest, origin, partial, reply
+from example_origin import DATA, PREFIX, TAG, digest, origin, partial, reply, stall_body
 
 DLL = Path(__file__).resolve().parent / "src/bin/Release/net10.0/RangeFetch.dll"
 OLD = b"prior published artifact"
@@ -49,6 +50,71 @@ class DownloadTests(unittest.TestCase):
             self.assertEqual((receipt["reusedBytes"], receipt["downloadedBytes"]), (0, len(DATA)))
             self.assertEqual(self.destination.read_bytes(), DATA)
             self.assertEqual(calls, [(None, None), (f"bytes={PREFIX}-", '"old"')])
+
+    def test_stalled_full_and_partial_reads_resume_from_last_written_byte(self):
+        release = Event()
+        with origin(stall_body(release), stall_body(release, PREFIX, 2 * PREFIX),
+                    partial(2 * PREFIX)) as (url, calls):
+            try:
+                for _ in range(2):
+                    result = subprocess.run(self.cmd(url) + ["--idle-timeout-ms", "500"],
+                                            capture_output=True, timeout=10)
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertIn(b"No response body data received for 500 ms", result.stderr)
+                    self.assertEqual(self.destination.read_bytes(), OLD)
+                receipt = self.invoke(url)
+                self.assertEqual(receipt["reusedBytes"], 2 * PREFIX)
+                self.assertEqual(receipt["downloadedBytes"], len(DATA) - 2 * PREFIX)
+                self.assertEqual(self.destination.read_bytes(), DATA)
+                self.assertEqual(calls, [(None, None), (f"bytes={PREFIX}-", TAG),
+                                         (f"bytes={2 * PREFIX}-", TAG)])
+            finally:
+                release.set()
+
+    def test_headers_without_any_body_time_out_and_next_run_uses_full_get(self):
+        release = Event()
+        with origin(stall_body(release, stop=0), reply(200, DATA)) as (url, calls):
+            try:
+                result = subprocess.run(self.cmd(url) + ["--idle-timeout-ms", "500"],
+                                        capture_output=True, timeout=10)
+                self.assertIn(b"No response body data received", result.stderr)
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(self.destination.read_bytes(), OLD)
+                self.assertEqual(self.invoke(url)["reusedBytes"], 0)
+                self.assertEqual(self.destination.read_bytes(), DATA)
+                self.assertEqual(calls, [(None, None)] * 2)
+            finally:
+                release.set()
+
+    def test_progressing_body_can_take_longer_than_idle_limit(self):
+        def paced(handler):
+            handler.send_response(200)
+            handler.send_header("Content-Length", str(len(DATA)))
+            handler.end_headers()
+            for start in range(0, len(DATA), 16384):
+                if start:
+                    sleep(.1)
+                handler.wfile.write(DATA[start:start + 16384])
+                handler.wfile.flush()
+
+        with origin(paced) as (url, calls):
+            start = monotonic()
+            result = subprocess.run(self.cmd(url) + ["--idle-timeout-ms", "1000"],
+                                    capture_output=True, timeout=12)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertGreater(monotonic() - start, 1)
+            self.assertEqual(json.loads(result.stdout)["downloadedBytes"], len(DATA))
+            self.assertEqual(self.destination.read_bytes(), DATA)
+            self.assertEqual(calls, [(None, None)])
+
+    def test_invalid_idle_limit_rejected_before_contacting_source(self):
+        with origin() as (url, calls):
+            for value in ("0", "-1", "1.5", "2147483648"):
+                with self.subTest(value=value):
+                    result = subprocess.run(self.cmd(url) + ["--idle-timeout-ms", value],
+                                            capture_output=True, timeout=10)
+                    self.assertEqual(result.returncode, 2)
+            self.assertEqual(calls, [])
 
     def test_weak_or_absent_tag_forces_full_get(self):
         for tag in ('W/"weak"', None):

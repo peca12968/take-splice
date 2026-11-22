@@ -24,6 +24,18 @@ dotnet run --project src -- URL OUTPUT SHA256
 
 成功時 stdout 輸出 JSON，其中 `fileBytes` 是成品大小，`reusedBytes` 是沿用的本機位元組數，`downloadedBytes` 是本次成功執行從網路讀入的本文位元組數。目標已符合雜湊時，狀態為 `already_verified`，網路讀取量為零。失敗會傳回非零結束碼及 stderr 診斷。中斷後可再執行同一命令。
 
+## 連線還在，資料卻停止傳輸
+
+來源可能已送出標頭和部分資料，隨後保持連線，讓下一次讀取一直等下去。下載器預設為每次等待本文資料設定 30 秒期限，逾時便結束並釋放目標檔的鎖。可以在原有命令後加上 `--idle-timeout-ms 5000`，把這個期限調成 5 秒。下載可以持續數分鐘，只要每次讀取都能及時收到資料。等待回應標頭由 HttpClient 自身的逾時機制處理。[.NET 串流回應與逾時範圍](https://learn.microsoft.com/en-us/dotnet/api/system.net.http.httpcompletionoption?view=net-10.0#remarks)
+
+以下測試讓伺服器先後在第 65,536 和第 131,072 個位元組停住，兩次都保持連線。前兩個程序各自收到閒置逾時，原先發布的檔案仍可讀。第三個程序使用強 ETag 接續，只下載剩餘的 131,072 位元組，測試逐位元組比對最終檔案。另有案例讓來源每隔 0.1 秒送出一段，整體傳輸超過設定的 1 秒仍成功。
+
+```sh
+python -m unittest -v test_download.DownloadTests.test_stalled_full_and_partial_reads_resume_from_last_written_byte
+```
+
+## 續傳與版本判定
+
 | 來源或檔案狀態 | 工具的處理方式 |
 | --- | --- |
 | 強 ETag 與已存版本一致 | 驗證 206 的 ETag、起訖、總長及宣告長度後，從已存位置接續。回覆只涵蓋部分剩餘範圍時，再請求下一段 |
@@ -39,7 +51,7 @@ dotnet run --project src -- URL OUTPUT SHA256
 
 工具在目標旁建立專屬的 `OUTPUT.range-fetch/` 目錄，保存暫存資料、版本資訊及鎖檔。同一目標同時只允許一個下載程序，第二個程序會在送 HTTP 請求之前結束。發布使用同一檔案系統的檔案替換，目標內容以整份 SHA-256 驗證。此示範適用於單機的一般本機檔案系統。
 
-九個黑箱測試會啟動真正的 HTTP 服務，並讓不同 .NET 程序依序下載、重試或競爭同一個目標。測試也刻意讓伺服器送出錯誤範圍或換版內容，核對舊產物、續傳請求與最終交付檔案。[測試](test_download.py) · [GitHub Actions](.github/workflows/ci.yml)
+十三個黑箱測試會啟動真正的 HTTP 服務，並讓不同 .NET 程序依序下載、重試或競爭同一個目標。測試也刻意讓伺服器停住、送出錯誤範圍或換版內容，核對舊產物、續傳請求與最終交付檔案。[測試](test_download.py) · [GitHub Actions](.github/workflows/ci.yml)
 
 **履歷用語**　以 C# 與 .NET 實作 HTTP 產物續傳工具，結合 Range、強 ETag、SHA-256 與同檔案系統替換，透過跨程序測試驗證斷線接續、版本切換及並行寫入。
 
