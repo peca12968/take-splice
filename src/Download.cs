@@ -10,7 +10,7 @@ internal sealed record Checkpoint(string Resource, string Digest, string ETag, l
 internal static class Download
 {
     public static async Task<Receipt> Run(HttpClient client, Uri uri, string destination, string digest,
-        int idleTimeoutMs, CancellationToken ct)
+        int idleTimeoutMs, int? maxRangeBytes, CancellationToken ct)
     {
         var directory = destination + ".range-fetch";
         Directory.CreateDirectory(directory);
@@ -38,15 +38,17 @@ internal static class Download
             }
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
             request.Headers.AcceptEncoding.ParseAdd("identity");
+            long? requestedEnd = maxRangeBytes is int window
+                ? offset + Math.Min(long.MaxValue - offset, window - 1L) : null;
+            if (offset > 0 || requestedEnd.HasValue)
+                request.Headers.Range = new RangeHeaderValue(offset, requestedEnd);
             if (offset > 0)
-            {
-                request.Headers.Range = new RangeHeaderValue(offset, null);
                 request.Headers.IfRange = new RangeConditionHeaderValue(EntityTagHeaderValue.Parse(saved!.ETag));
-            }
             using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
-            if (offset > 0 && response.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable)
+            if (request.Headers.Range != null && response.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable)
             {
                 offset = reused = 0;
+                maxRangeBytes = null;
                 continue;
             }
             if (response.Content.Headers.ContentEncoding.Any(value => !value.Equals("identity", StringComparison.OrdinalIgnoreCase)))
@@ -66,18 +68,31 @@ internal static class Download
                     ? new Checkpoint(resource, digest, tag.ToString(), segmentBytes) : null;
                 WriteCheckpoint(metadata, saved);
             }
-            else if (response.StatusCode == HttpStatusCode.PartialContent && offset > 0)
+            else if (response.StatusCode == HttpStatusCode.PartialContent && request.Headers.Range != null)
             {
                 var range = response.Content.Headers.ContentRange;
-                if (response.Headers.ETag?.ToString() != saved!.ETag ||
+                var tag = response.Headers.ETag;
+                if (offset == 0 && (tag == null || tag.IsWeak || tag.Tag == "*"))
+                {
+                    maxRangeBytes = null;
+                    continue;
+                }
+                if ((offset > 0 && tag?.ToString() != saved!.ETag) ||
                     range?.Unit != "bytes" || range.From != offset || range.To is not long end ||
                     range.Length is not long length || end < offset || end >= length ||
-                    (saved.Total.HasValue && saved.Total != length))
+                    (requestedEnd.HasValue && end > requestedEnd.Value) ||
+                    (offset > 0 && saved!.Total.HasValue && saved.Total != length))
                     throw new InvalidDataException("Mismatched validator or Content-Range; partial response rejected.");
                 segmentBytes = end - offset + 1;
                 if (response.Content.Headers.ContentLength is long declared && declared != segmentBytes)
                     throw new InvalidDataException("Content-Length disagrees with Content-Range.");
-                if (saved.Total == null)
+                if (offset == 0)
+                {
+                    using (File.Create(part)) { }
+                    saved = new Checkpoint(resource, digest, tag!.ToString(), length);
+                    WriteCheckpoint(metadata, saved);
+                }
+                else if (saved!.Total == null)
                 {
                     saved = saved with { Total = length };
                     WriteCheckpoint(metadata, saved);

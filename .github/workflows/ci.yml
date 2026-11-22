@@ -19,3 +19,13 @@ jobs:
       - run: dotnet build src -c Release
       - run: python -m unittest -v
       - run: python demo.py
+      - uses: actions/checkout@v4
+        with:
+          repository: peca12968/chunk-courier
+          ref: 945af9569d76f35462584bf2c3ed4c831566e3e0
+          path: chunk-courier
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: python courier_demo.py chunk-courier

@@ -51,6 +51,23 @@ class DownloadTests(unittest.TestCase):
             self.assertEqual(self.destination.read_bytes(), DATA)
             self.assertEqual(calls, [(None, None), (f"bytes={PREFIX}-", '"old"')])
 
+    def test_first_window_with_weak_tag_or_empty_range_falls_back_to_full_get(self):
+        for first in [partial(0, PREFIX-1, tag='W/"weak"'), reply(416, content_range="bytes */0")]:
+            with origin(first, reply(200, DATA)) as (url, calls):
+                self.destination.write_bytes(OLD)
+                result = subprocess.run(self.cmd(url) + ["--max-range-bytes", str(PREFIX)], capture_output=True, timeout=12)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.destination.read_bytes(), DATA)
+                self.assertEqual(calls, [(f"bytes=0-{PREFIX-1}", None), (None,None)])
+
+    def test_server_overruns_window_and_retry_keeps_verified_prefix(self):
+        with origin(partial(0, PREFIX-1), partial(PREFIX), partial(PREFIX)) as (url, calls):
+            result = subprocess.run(self.cmd(url) + ["--max-range-bytes",str(PREFIX)], capture_output=True, timeout=12)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(self.destination.read_bytes(),OLD)
+            self.assertEqual(self.invoke(url)["reusedBytes"],PREFIX)
+            self.assertEqual(calls, [(f"bytes=0-{PREFIX-1}",None),(f"bytes={PREFIX}-{2*PREFIX-1}",TAG),(f"bytes={PREFIX}-",TAG)])
+
     def test_stalled_full_and_partial_reads_resume_from_last_written_byte(self):
         release = Event()
         with origin(stall_body(release), stall_body(release, PREFIX, 2 * PREFIX),

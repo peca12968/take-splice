@@ -36,6 +36,23 @@ python -m unittest -v test_download.DownloadTests.test_stalled_full_and_partial_
 
 ## 續傳與版本判定
 
+### 讓來源分段交付
+
+在命令後加上 `--max-range-bytes 65536`，下載器從第一個位元組開始，每次以 HTTP Range 要求最多 65,536 B。首段的強 ETag 會用於後續每次 If-Range 檢查，可和 `--idle-timeout-ms` 一起使用。若來源忽略 Range 並回傳 200，就接收整份檔案。首段沒有強 ETag 或範圍無法滿足時，下載器會改用完整 GET。若 206 的回傳範圍超過已要求的上限，會在寫入該段前結束。
+
+以下示範需要 Node.js 24.2 以上，並使用固定版本的 Chunk Courier 作為真實 HTTP 來源。從本專案目錄執行。
+
+```sh
+git clone https://github.com/peca12968/chunk-courier.git ../chunk-courier
+git -C ../chunk-courier checkout 945af9569d76f35462584bf2c3ed4c831566e3e0
+dotnet build src -c Release
+python courier_demo.py ../chunk-courier
+```
+
+示範先透過上傳客戶端送出並封存 150,001 B，下載時由代理轉送實際範圍回應。第一個程序取得首段 65,536 B，再取得第二段的 4,096 B 後斷線。先前發布的檔案仍可讀。下一個程序從位置 69,632 接續，只下載剩下的 80,369 B。示範逐筆核對四次 Range 與 If-Range 標頭、最後收據及檔案內容。[跨服務驗證](courier_demo.py) · [上傳來源](https://github.com/peca12968/chunk-courier/tree/945af9569d76f35462584bf2c3ed4c831566e3e0)
+
+### 接續下載時的回應處理
+
 | 來源或檔案狀態 | 工具的處理方式 |
 | --- | --- |
 | 強 ETag 與已存版本一致 | 驗證 206 的 ETag、起訖、總長及宣告長度後，從已存位置接續。回覆只涵蓋部分剩餘範圍時，再請求下一段 |
