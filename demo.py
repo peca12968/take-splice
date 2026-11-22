@@ -5,7 +5,7 @@ import struct
 from tempfile import TemporaryDirectory
 import wave
 
-from shard_rescue import pack, part, restore
+from shard_rescue import pack, part, rebuild_volume, restore, scrub
 
 
 def demo(root):
@@ -30,7 +30,16 @@ def demo(root):
         raise RuntimeError("restored audio differs")
     with wave.open(str(output), "rb") as wav:
         frames = wav.getnframes()
-    return {"stripes": packed["stripes"], "frames": frames, **restored}
+    before = scrub(archive)
+    spare = root / "replacement-d1"
+    rebuilt = rebuild_volume(archive, "d1", spare)
+    for shard in spare.iterdir():
+        if shard.read_bytes() != (root / "offline-d1" / shard.name).read_bytes():
+            raise RuntimeError("replacement volume differs")
+    spare.rename(archive / "d1")
+    after = scrub(archive)
+    return {"stripes": packed["stripes"], "frames": frames, **restored,
+            "before_rebuild": before["issues"], "replacement": rebuilt, "after_rebuild": after["issues"]}
 
 
 if __name__ == "__main__":

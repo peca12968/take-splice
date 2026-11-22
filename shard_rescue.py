@@ -1,4 +1,4 @@
-"""Pack and restore fixed 4+2 erasure-coded archives with a trusted manifest."""
+"""Pack, inspect and recover fixed 4+2 erasure-coded archives with a trusted manifest."""
 import argparse
 from functools import cache
 import hashlib
@@ -127,21 +127,94 @@ def load_manifest(archive):
     return record
 
 
-def read_shard(path, expected):
+def inspect_shard(path, expected):
     try:
         with path.open("rb") as stream:
             block = stream.read(BLOCK + 1)
     except FileNotFoundError:
-        return None
-    if len(block) == BLOCK and digest(block) == expected:
-        return block
-    return None
+        return None, "missing"
+    except OSError:
+        return None, "unreadable"
+    if len(block) != BLOCK:
+        return None, "wrong_length"
+    if digest(block) != expected:
+        return None, "digest_mismatch"
+    return block, None
+
+
+def scan_stripe(archive, stripe, row):
+    shards = []
+    faults = {}
+    for slot, expected in zip(SLOTS, row, strict=True):
+        block, reason = inspect_shard(part(archive, stripe, slot), expected)
+        shards.append(block)
+        if reason:
+            faults[slot] = reason
+    return shards, faults
+
+
+def scrub(archive):
+    record = load_manifest(archive)
+    issues = []
+    status = "healthy"
+    for index, row in enumerate(record["stripes"]):
+        _, faults = scan_stripe(archive, index, row)
+        if faults:
+            recoverable = len(faults) <= 2
+            issues.append({"stripe": index, "faults": faults, "recoverable": recoverable})
+            if not recoverable:
+                status = "unrecoverable"
+            elif status == "healthy":
+                status = "degraded"
+    return {"status": status, "stripes": len(record["stripes"]), "issues": issues}
+
+
+def check_destination(archive, output):
+    archive_root = archive.resolve()
+    if output.parent.resolve().is_relative_to(archive_root) or output.resolve().is_relative_to(archive_root):
+        raise ValueError("destination must be outside the archive")
+
+
+def require_recoverable(index, lost):
+    if lost > 2:
+        raise ValueError(f"stripe {index}: {lost} unusable shards, at most 2 recoverable")
+
+
+def rebuild_volume(archive, slot, output):
+    position = SLOTS.index(slot)
+    check_destination(archive, output)
+    rows = load_manifest(archive)["stripes"]
+    output.mkdir()  # Reserve the spare exclusively, even if another rebuild is running.
+    copied = rebuilt = 0
+    written = []
+    try:
+        for index, row in enumerate(rows):
+            source = part(archive, index, slot)
+            block, _ = inspect_shard(source, row[position])
+            if block is None:
+                shards, faults = scan_stripe(archive, index, row)
+                require_recoverable(index, len(faults))
+                data = recover_data(shards)
+                block = data[position] if position < 4 else syndromes(data)[position - 4]
+                if digest(block) != row[position]:
+                    raise ValueError(f"stripe {index}: reconstructed shard digest mismatch")
+                rebuilt += 1
+            else:
+                copied += 1
+            target = output / source.name
+            with target.open("xb") as stream:
+                written.append(target)
+                stream.write(block)
+    except BaseException:
+        for target in written:
+            target.unlink(missing_ok=True)
+        output.rmdir()
+        raise
+    return {"slot": slot, "copied": copied, "rebuilt": rebuilt, "bytes": len(rows) * BLOCK}
 
 
 def restore(archive, output):
-    archive_root = archive.resolve()
-    if output.parent.resolve().is_relative_to(archive_root) or output.resolve().is_relative_to(archive_root):
-        raise ValueError("restore destination must be outside the archive")
+    check_destination(archive, output)
     record = load_manifest(archive)
     whole = hashlib.sha256()
     remaining = record["size"]
@@ -151,11 +224,9 @@ def restore(archive, output):
         with NamedTemporaryFile(dir=output.parent, delete=False) as out:
             tmp = Path(out.name)
             for index, row in enumerate(record["stripes"]):
-                shards = [read_shard(part(archive, index, slot), expected)
-                          for slot, expected in zip(SLOTS, row, strict=True)]
-                lost = shards.count(None)
-                if lost > 2:
-                    raise ValueError(f"stripe {index}: {lost} unusable shards, at most 2 recoverable")
+                shards, faults = scan_stripe(archive, index, row)
+                lost = len(faults)
+                require_recoverable(index, lost)
                 erasures += lost
                 data = recover_data(shards)
                 for i, block in enumerate(data):
@@ -183,16 +254,29 @@ def main():
     decode = commands.add_parser("restore")
     decode.add_argument("archive", type=Path)
     decode.add_argument("output", type=Path)
+    inspect = commands.add_parser("scrub", help="audit every shard against the manifest")
+    inspect.add_argument("archive", type=Path)
+    rebuild = commands.add_parser("rebuild-volume", help="build one replacement volume in a new directory")
+    rebuild.add_argument("archive", type=Path)
+    rebuild.add_argument("slot", choices=SLOTS)
+    rebuild.add_argument("output", type=Path)
     args = parser.parse_args()
     try:
         if args.command == "pack":
             result = pack(args.source, args.archive)
-        else:
+        elif args.command == "restore":
             result = restore(args.archive, args.output)
+        elif args.command == "rebuild-volume":
+            result = rebuild_volume(args.archive, args.slot, args.output)
+        else:
+            result = scrub(args.archive)
     except (ValueError, OSError) as error:
         parser.exit(1, f"{parser.prog}: {error}\n")
     print(json.dumps(result))
+    if args.command == "scrub":
+        return {"healthy": 0, "degraded": 2, "unrecoverable": 3}[result["status"]]
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

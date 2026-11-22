@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 
-from shard_rescue import BLOCK, SLOTS, pack, part, restore
+from shard_rescue import BLOCK, SLOTS, pack, part, rebuild_volume, restore
 from demo import demo
 
 
@@ -56,7 +56,79 @@ class RescueTest(unittest.TestCase):
         self.assertEqual(report, {
             "stripes": 2, "frames": 48000, "bytes": 96044, "unusable_shards": 4,
             "sha256": "e50c0905655e4884108eeea28e5ba22fc2012de6e0f7fc0ca4541d4e27e8d44a",
+            "before_rebuild": [
+                {"stripe": 0, "faults": {"d1": "missing", "d3": "wrong_length"}, "recoverable": True},
+                {"stripe": 1, "faults": {"d1": "missing", "q": "digest_mismatch"}, "recoverable": True}],
+            "replacement": {"slot": "d1", "copied": 0, "rebuilt": 2, "bytes": 32768},
+            "after_rebuild": [
+                {"stripe": 0, "faults": {"d3": "wrong_length"}, "recoverable": True},
+                {"stripe": 1, "faults": {"q": "digest_mismatch"}, "recoverable": True}],
         })
+
+    def test_every_volume_rebuild_with_each_possible_second_erasure(self):
+        self.prepare(BLOCK * 4 + 37)
+        for slot, other in itertools.permutations(SLOTS, 2):
+            with self.subTest(slot=slot, other=other):
+                expected = part(self.archive, 1, slot).read_bytes()
+                second = part(self.archive, 1, other)
+                original = second.read_bytes()
+                part(self.archive, 1, slot).unlink()
+                second.write_bytes(b"bad")
+                with tempfile.TemporaryDirectory(dir=self.root) as tmp:
+                    spare = Path(tmp) / "spare"
+                    result = rebuild_volume(self.archive, slot, spare)
+                    self.assertEqual((result["copied"], result["rebuilt"]), (1, 1))
+                    self.assertEqual((spare / "00000001.bin").read_bytes(), expected)
+                    self.assertEqual((spare / "00000000.bin").read_bytes(), part(self.archive, 0, slot).read_bytes())
+                    self.assertFalse(part(self.archive, 1, slot).exists())
+                part(self.archive, 1, slot).write_bytes(expected)
+                second.write_bytes(original)
+
+    def test_scrub_exit_codes_and_late_failure_cleanup(self):
+        self.prepare(8 * BLOCK + 1)
+        def audit(code):
+            command = self.cli("scrub", self.archive)
+            self.assertEqual(command.returncode, code, command.stderr)
+            return json.loads(command.stdout)
+
+        self.assertEqual(audit(0), {"status": "healthy", "stripes": 3, "issues": []})
+        part(self.archive, 1, "q").unlink()
+        self.assertEqual(audit(2)["status"], "degraded")
+        part(self.archive, 1, "d0").write_bytes(b"short")
+        part(self.archive, 1, "d2").unlink()
+        part(self.archive, 2, "q").write_bytes(b"short")
+        report = audit(3)
+        self.assertEqual(report["status"], "unrecoverable")
+        self.assertEqual([issue["recoverable"] for issue in report["issues"]], [False, True])
+        proc = self.cli("rebuild-volume", self.archive, "q", self.output)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("stripe 1: 3 unusable", proc.stderr)
+        self.assertFalse(self.output.exists())
+
+    def test_verified_copy_even_when_other_slots_are_lost_and_digest_failure(self):
+        self.prepare(4 * BLOCK)
+        for slot in ("d0", "p", "q"):
+            part(self.archive, 0, slot).unlink()
+        answer = self.cli("rebuild-volume", self.archive, "d2", self.output)
+        self.assertEqual(answer.returncode, 0, answer.stderr)
+        self.assertEqual(json.loads(answer.stdout)["copied"], 1)
+        with self.assertRaises(FileExistsError):
+            rebuild_volume(self.archive, "d2", self.output)
+        self.assertEqual((self.output / "00000000.bin").read_bytes(), part(self.archive, 0, "d2").read_bytes())
+        with self.assertRaisesRegex(ValueError, "outside"):
+            rebuild_volume(self.archive, "d2", self.archive / "extra")
+        # Repeat with coherent surviving parity but a wrong expected digest for the lost shard.
+        clean = self.root / "clean"
+        pack(self.source, clean)
+        part(clean, 0, "p").unlink()
+        path = clean / "manifest.json"
+        manifest = json.loads(path.read_text())
+        manifest["stripes"][0][4] = "0" * 64
+        path.write_text(json.dumps(manifest))
+        spare = self.root / "spare"
+        with self.assertRaisesRegex(ValueError, "digest mismatch"):
+            rebuild_volume(clean, "p", spare)
+        self.assertFalse(spare.exists())
 
     def test_three_bad_shards_in_last_stripe_preserve_prior_output(self):
         self.prepare(4 * BLOCK + 1)
