@@ -75,3 +75,106 @@ jobs:
     defaults:
       run:
         working-directory: modules/channel-lag
+  fold-proof-verify:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+        - ubuntu-latest
+        - windows-latest
+    steps:
+    - uses: actions/checkout@v7
+    - uses: actions/setup-python@v7
+      with:
+        python-version: '3.12'
+    - run: python -m pip install -r requirements-test.txt
+    - run: python -m unittest -v
+    - run: python fold_proof.py examples/reading.pdf right-bound.pdf --binding right --paper letter
+    defaults:
+      run:
+        working-directory: modules/fold-proof
+  sprite-crate-replay:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+        - ubuntu-latest
+        - windows-latest
+    steps:
+    - uses: actions/checkout@v7
+    - uses: actions/setup-go@v6
+      with:
+        go-version: 1.25.x
+        cache: false
+    - uses: actions/setup-python@v7
+      with:
+        python-version: '3.12'
+    - run: go vet ./...
+    - run: python -m pip install Pillow==13.0.0
+    - run: python -m unittest -v
+    defaults:
+      run:
+        working-directory: modules/sprite-crate
+  shard-rescue-verify:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+        - ubuntu-latest
+        - windows-latest
+    steps:
+    - uses: actions/checkout@v7
+    - uses: actions/setup-python@v7
+      with:
+        python-version: '3.12'
+    - run: python -m unittest -v
+    - run: python demo.py
+    defaults:
+      run:
+        working-directory: modules/shard-rescue
+  chunk-courier-verify:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+        - ubuntu-latest
+        - windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+    - run: node --test
+    defaults:
+      run:
+        working-directory: modules/chunk-courier
+  chunk-courier-range-fetch-download:
+    strategy:
+      matrix:
+        os:
+        - ubuntu-latest
+        - windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v7
+    - uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: 10.0.x
+    - uses: actions/setup-python@v7
+      with:
+        python-version: '3.13'
+    - run: dotnet build src -c Release
+    - run: python -m unittest -v
+    - run: python demo.py
+    - uses: actions/checkout@v4
+      with:
+        ref: 945af9569d76f35462584bf2c3ed4c831566e3e0
+        path: modules/chunk-courier/modules/range-fetch/chunk-courier
+        persist-credentials: false
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+    - run: python courier_demo.py chunk-courier
+    defaults:
+      run:
+        working-directory: modules/chunk-courier/modules/range-fetch
