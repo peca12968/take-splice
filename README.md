@@ -42,6 +42,19 @@ dotnet run --project src -c Release -- listen/edit.tsv smooth-edit.wav --edge-fa
 
 這個模式保留總幀數、片段偏移及報表欄位。整合測試用新音訊重新輸出 WebVTT，核對六句字幕及時碼與原範例一致，並從實際 WAV 讀取兩個接點前後的取樣值。[作品站共用的接點數值](examples/edge-fade-demo.json) · [實際 WAV 與字幕驗證](test_splice.py)
 
+## 打包與驗收媒體交付
+
+先依上方步驟建置剪輯器並產生 `listen`，再把 WAV 與對時後的字幕放進一個 ZIP。同一批輸入與淡化參數可重建位元組相同的交付檔。
+
+```sh
+python modules/cue-conform/deliver.py build listen/edit.tsv modules/cue-conform/examples/tracks.json delivery.zip --edge-fade-frames 240
+python modules/cue-conform/deliver.py verify delivery.zip
+```
+
+`manifest.json` 記下 WAV 的取樣率、聲道、位元深度與總幀數，以及字幕句數和最晚結束毫秒。驗收會核對兩個檔案的位元組數與 SHA-256，直接從 ZIP 讀取 PCM 和 WebVTT，並檢查字幕結束時間是否落在音訊向上取整的毫秒邊界內。ZIP 內使用固定檔名，匯出驗證成功後才發布成品。同名匯出發生競爭時只會成功一次。
+
+收件者可從發送方另取 `build` 回傳的 ZIP `sha256`，將 64 位十六進位字串傳給 `verify --sha256`，核對收到的完整版本。範例將兩次出現的「高音」改為「旁白」，ZIP 仍可開啟，但驗收會指出字幕的 SHA-256 不符。[CLI](modules/cue-conform/deliver.py) · [範例驗收資料](examples/delivery-demo.json) · [端對端測試](test_delivery.py)
+
 ## 格式與檔案處理
 
 - 接受小端 RIFF/WAVE 中的整數 PCM，支援單聲道、立體聲與 16、24 位元。所有片段需有相同取樣率、位元深度與聲道數。預設為硬剪接，可依音訊內容選擇在接點加上短淡出及淡入。

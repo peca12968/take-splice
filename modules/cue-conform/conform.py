@@ -80,8 +80,11 @@ class Track:
 
 
 def read_track(path, alignment=None):
-    text = path.read_text(encoding="utf-8-sig").rstrip("\n")
-    blocks = re.split(r"\n{2,}", text)
+    return parse_track(path.read_text(encoding="utf-8-sig"), path, alignment)
+
+
+def parse_track(text, path, alignment=None):
+    blocks = re.split(r"\n{2,}", text.rstrip("\n"))
     if not re.fullmatch(r"WEBVTT(?:[ \t][^\n]*)?", blocks[0]) or "-->" in blocks[0]:
         raise ValueError(f"{path}: expected WEBVTT header and blank line")
     cues = []

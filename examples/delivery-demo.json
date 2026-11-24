@@ -1,0 +1,32 @@
+{
+  "altered": {
+    "expected_sha256": "11c4384e98cfc8ff52bd080a747050f48d8b6389cf4b8d767ea5f1b755ffc26c",
+    "file": "captions.vtt",
+    "observed_sha256": "4e2d7b04394d98af44902ed441128398c8d8cdf0d0d0a5d95e7cb18461939b0a",
+    "verified": false
+  },
+  "manifest": {
+    "audio": {
+      "bits": 16,
+      "channels": 2,
+      "frames": 60001,
+      "sample_rate": 48000
+    },
+    "captions": {
+      "cues": 6,
+      "last_end_ms": 1251
+    },
+    "files": {
+      "audio.wav": {
+        "bytes": 240048,
+        "sha256": "0b86629749b0563856ad8fd8021781a2ed2b611a4d3e6d517a7a25719f5df5ee"
+      },
+      "captions.vtt": {
+        "bytes": 481,
+        "sha256": "11c4384e98cfc8ff52bd080a747050f48d8b6389cf4b8d767ea5f1b755ffc26c"
+      }
+    },
+    "version": 1
+  },
+  "sha256": "67f4a11c8ad71dc4810e85b5d432ee9579696a98ace86f5be523c8d02c1b05da"
+}
