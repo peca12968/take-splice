@@ -55,6 +55,19 @@ python modules/cue-conform/deliver.py verify delivery.zip
 
 收件者可從發送方另取 `build` 回傳的 ZIP `sha256`，將 64 位十六進位字串傳給 `verify --sha256`，核對收到的完整版本。範例將兩次出現的「高音」改為「旁白」，ZIP 仍可開啟，但驗收會指出字幕的 SHA-256 不符。[CLI](modules/cue-conform/deliver.py) · [範例驗收資料](examples/delivery-demo.json) · [端對端測試](test_delivery.py)
 
+### 裁出有字幕的複核片段
+
+收到交付包後，可交付指定片段供別人複核。`excerpt` 的兩個幀索引使用原交付 WAV 的座標，含起點、不含終點。此步驟只需 Python。
+
+```sh
+python modules/cue-conform/deliver.py excerpt delivery.zip 39601 52801 review.zip
+python modules/cue-conform/deliver.py verify review.zip
+```
+
+範例實際複製 13,200 幀，得到 275 毫秒的立體聲片段。字幕「節拍」顯示於片段第 0–176 毫秒，「高音」顯示於第 176–275 毫秒，並保留既有的版面設定。對時以驗收包中的毫秒字幕為依據，先取與音訊範圍的交集，再以片段開頭為零點換算。無法在整數毫秒刻度顯示的字幕會計入 `sub_ms_omitted`。
+
+命令在同一個來源檔案控制代碼上完整核對 ZIP、WAV 與字幕，再用固定大小緩衝區複製選中幀。可加 `--sha256` 核對發送方提供的來源雜湊。JSON 收據記下來源雜湊、原幀區間及新 ZIP 的雜湊。新包沿用同一驗收格式，發布時需使用新的檔名。[實際片段的驗收收據](examples/excerpt-demo.json) · [PCM、字幕及並行發布測試](test_delivery.py)
+
 已歸檔的錄音可用 Shard Rescue 只取回指定的位元組區間。範例跨兩條受損的條帶還原 32,768 B，並與原檔逐位元組比對。第三條帶超過修復能力，完整還原仍會失敗。[片段還原與重跑](modules/shard-rescue/README.md#只還原指定的位元組區間)
 
 ## 格式與檔案處理

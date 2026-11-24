@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+from io import BytesIO
 import json
 from pathlib import Path
 import subprocess
@@ -76,6 +77,76 @@ class DeliveryTests(unittest.TestCase):
             self.assertEqual(report["manifest"]["audio"], {"frames": 3, "sample_rate": 44100, "channels": 1, "bits": 24})
             self.assertEqual(report["manifest"]["captions"], {"cues": 0, "last_end_ms": 0})
             self.assertEqual(self.cli("verify", output).returncode, 0)
+            excerpt = root / "mono-excerpt.zip"
+            sliced = self.cli("excerpt", output, 1, 2, excerpt, "--sha256", report["sha256"])
+            self.assertEqual(sliced.returncode, 0, sliced.stderr)
+            with ZipFile(excerpt) as archive:
+                wav = archive.read("audio.wav")
+                self.assertEqual(int.from_bytes(wav[4:8], "little"), len(wav) - 8)
+                self.assertEqual(wav[44:], b"\x00\x00\x01\x00")
+                self.assertEqual(archive.read("captions.vtt"), b"WEBVTT\n\n")
+            self.assertEqual(self.cli("verify", excerpt).returncode, 0)
+
+    def test_excerpt_copies_exact_pcm_and_rebases_captions_from_a_fractional_millisecond(self):
+        output = self.root / "excerpt.zip"
+        start, end = 39_601, 52_801
+        result = self.cli("excerpt", self.release, start, end, output, "--sha256", self.report["sha256"].upper())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["source_sha256"], self.report["sha256"])
+        self.assertEqual(report["range"], {"start_frame": start, "end_frame": end})
+        self.assertEqual(report["manifest"]["audio"]["frames"], 13_200)
+        self.assertEqual(report["manifest"]["captions"], {"cues": 2, "last_end_ms": 275})
+        self.assertEqual(report["sub_ms_omitted"], 0)
+        with wave.open(BytesIO(self.members["audio.wav"]), "rb") as original:
+            source_pcm = original.readframes(original.getnframes())
+        with ZipFile(output) as archive:
+            with wave.open(BytesIO(archive.read("audio.wav")), "rb") as cropped:
+                self.assertEqual(cropped.readframes(cropped.getnframes()), source_pcm[start * 4:end * 4])
+            captions = archive.read("captions.vtt").decode("utf-8")
+        self.assertEqual(captions, "WEBVTT\n\nclip-1-cue-4\n00:00:00.000 --> 00:00:00.176\n節拍\n\n"
+                         "clip-1-cue-5\n00:00:00.176 --> 00:00:00.275 line:15% position:10% size:38% align:start\n高音\n")
+        verified = self.cli("verify", output, "--sha256", report["sha256"])
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+        self.assertEqual(json.loads(verified.stdout), {key: report[key] for key in ("sha256", "manifest")})
+        another = self.root / "repeated-excerpt.zip"
+        self.assertEqual(self.cli("excerpt", self.release, start, end, another).returncode, 0)
+        self.assertEqual(output.read_bytes(), another.read_bytes())
+        fixture = json.loads((ROOT / "examples/excerpt-demo.json").read_text(encoding="utf-8"))
+        self.assertEqual(fixture, {**report, "source_frames": self.report["manifest"]["audio"]["frames"],
+                                   "captions_vtt": captions})
+
+    def test_short_excerpt_records_cues_that_cannot_be_shown_at_millisecond_precision(self):
+        output = self.root / "sub-millisecond.zip"
+        result = self.cli("excerpt", self.release, 38_279, 38_305, output)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["sub_ms_omitted"], 1)
+        self.assertEqual(report["manifest"]["audio"]["frames"], 26)
+        self.assertEqual(report["manifest"]["captions"], {"cues": 0, "last_end_ms": 0})
+
+    def test_invalid_and_concurrent_excerpt_requests_preserve_existing_files(self):
+        output = self.root / "excerpt-race.zip"
+        changed = self.rewrite("changed-before-excerpt.zip", {"captions.vtt": b"WEBVTT\n\n"})
+        for package, start, end, flags, error in [
+            (self.release, -1, 2, (), "half-open frame range"),
+            (self.release, 2, 2, (), "half-open frame range"),
+            (self.release, 0, 60_002, (), "end exceeds audio length"),
+            (self.release, 0, 2, ("--sha256", "0" * 64), "archive SHA-256 differs"),
+            (changed, 0, 2, (), "captions.vtt: byte length or SHA-256 differs"),
+        ]:
+            with self.subTest(package=package, start=start, end=end, flags=flags):
+                rejected = self.cli("excerpt", package, start, end, output, *flags)
+                self.assertEqual(rejected.returncode, 2)
+                self.assertIn(error, rejected.stderr)
+                self.assertFalse(output.exists())
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            replies = list(pool.map(lambda _: self.cli("excerpt", self.release, 1, 60_001, output), range(2)))
+        self.assertEqual(sorted(reply.returncode for reply in replies), [0, 2])
+        before = output.read_bytes()
+        self.assertEqual(self.cli("excerpt", self.release, 0, 2, output).returncode, 2)
+        self.assertEqual(output.read_bytes(), before)
+        self.assertEqual(self.cli("verify", output).returncode, 0)
 
     def rewrite(self, name, replacements):
         path = self.root / name
