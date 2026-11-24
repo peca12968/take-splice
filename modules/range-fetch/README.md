@@ -43,10 +43,9 @@ python -m unittest -v test_download.DownloadTests.test_stalled_full_and_partial_
 以下示範需要 Node.js 24.2 以上，並使用固定版本的 Chunk Courier 作為真實 HTTP 來源。從本專案目錄執行。
 
 ```sh
-git clone https://github.com/peca12968/chunk-courier.git ../chunk-courier
-git -C ../chunk-courier checkout 945af9569d76f35462584bf2c3ed4c831566e3e0
+git worktree add --detach ../chunk-courier-verified 945af9569d76f35462584bf2c3ed4c831566e3e0
 dotnet build src -c Release
-python courier_demo.py ../chunk-courier
+python courier_demo.py ../chunk-courier-verified
 ```
 
 示範先透過上傳客戶端送出並封存 150,001 B，下載時由代理轉送實際範圍回應。第一個程序取得首段 65,536 B，再取得第二段的 4,096 B 後斷線。先前發布的檔案仍可讀。下一個程序從位置 69,632 接續，只下載剩下的 80,369 B。示範逐筆核對四次 Range 與 If-Range 標頭、最後收據及檔案內容。[跨服務驗證](courier_demo.py) · [上傳來源](https://github.com/peca12968/chunk-courier/tree/945af9569d76f35462584bf2c3ed4c831566e3e0)
