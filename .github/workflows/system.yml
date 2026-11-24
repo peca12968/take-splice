@@ -1,0 +1,50 @@
+name: Verify chunk-courier system
+'on':
+- push
+- pull_request
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+        - ubuntu-latest
+        - windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+    - run: node --test
+  range-fetch-download:
+    strategy:
+      matrix:
+        os:
+        - ubuntu-latest
+        - windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v7
+    - uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: 10.0.x
+    - uses: actions/setup-python@v7
+      with:
+        python-version: '3.13'
+    - run: dotnet build src -c Release
+    - run: python -m unittest -v
+    - run: python demo.py
+    - uses: actions/checkout@v4
+      with:
+        ref: 945af9569d76f35462584bf2c3ed4c831566e3e0
+        path: modules/range-fetch/chunk-courier
+        persist-credentials: false
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+    - run: python courier_demo.py chunk-courier
+    defaults:
+      run:
+        working-directory: modules/range-fetch
