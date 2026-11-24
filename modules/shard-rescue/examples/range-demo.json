@@ -1,0 +1,40 @@
+{
+  "archive_bytes": 192044,
+  "stripe_bytes": 65536,
+  "archive_status": "unrecoverable",
+  "issues": [
+    {
+      "stripe": 0,
+      "faults": {
+        "d3": "missing",
+        "p": "missing"
+      },
+      "recoverable": true
+    },
+    {
+      "stripe": 1,
+      "faults": {
+        "d0": "missing",
+        "q": "missing"
+      },
+      "recoverable": true
+    },
+    {
+      "stripe": 2,
+      "faults": {
+        "d0": "missing",
+        "d1": "missing",
+        "p": "missing"
+      },
+      "recoverable": false
+    }
+  ],
+  "selected": {
+    "bytes": 32768,
+    "unusable_shards": 4,
+    "sha256": "f0c1e7483df99245d790a4e0d1670f0ce544f7ee53bef6ee67c4cb46181ca63f",
+    "offset": 49152,
+    "stripes_read": 2,
+    "verification": "shard_digests"
+  }
+}

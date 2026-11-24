@@ -10,6 +10,7 @@ from tempfile import NamedTemporaryFile
 
 
 BLOCK = 16 * 1024
+STRIPE_BYTES = 4 * BLOCK
 COEFFICIENTS = (1, 2, 4, 8)
 SLOTS = ("d0", "d1", "d2", "d3", "p", "q")
 FORMAT = "shard-rescue-4+2-v1"
@@ -90,10 +91,10 @@ def pack(source, archive):
         archive.mkdir()
         for slot in SLOTS:
             (archive / slot).mkdir()
-        while chunk := stream.read(4 * BLOCK):
+        while chunk := stream.read(STRIPE_BYTES):
             size += len(chunk)
             whole.update(chunk)
-            padded = chunk.ljust(4 * BLOCK, b"\0")
+            padded = chunk.ljust(STRIPE_BYTES, b"\0")
             data = [padded[i:i + BLOCK] for i in range(0, len(padded), BLOCK)]
             row = []
             for slot, block in zip(SLOTS, [*data, *syndromes(data)], strict=True):
@@ -119,7 +120,7 @@ def load_manifest(archive):
     size = record.get("size")
     rows = record.get("stripes")
     if (type(size) is not int or size < 0 or not is_hash(record.get("sha256"))
-            or not isinstance(rows, list) or len(rows) != (size + 4 * BLOCK - 1) // (4 * BLOCK)):
+            or not isinstance(rows, list) or len(rows) != (size + STRIPE_BYTES - 1) // STRIPE_BYTES):
         raise ValueError("invalid archive metadata")
     if any(not isinstance(row, list) or len(row) != len(SLOTS)
            or not all(is_hash(item) for item in row) for row in rows):
@@ -213,17 +214,26 @@ def rebuild_volume(archive, slot, output):
     return {"slot": slot, "copied": copied, "rebuilt": rebuilt, "bytes": len(rows) * BLOCK}
 
 
-def restore(archive, output):
+def restore(archive, output, *, interval=None):
     check_destination(archive, output)
     record = load_manifest(archive)
-    whole = hashlib.sha256()
-    remaining = record["size"]
+    size = record["size"]
+    offset, length = (0, size) if interval is None else interval
+    if type(offset) is not int or type(length) is not int or offset < 0 or length < 0 or offset + length > size:
+        raise ValueError(f"requested range is outside the original {size} bytes")
+    end = offset + length
+    first = offset // STRIPE_BYTES
+    stop = (end - 1) // STRIPE_BYTES + 1 if length else first
+    complete = offset == 0 and end == size
+    checksum = hashlib.sha256()
+    written = 0
     erasures = 0
     tmp = None
     try:
         with NamedTemporaryFile(dir=output.parent, delete=False) as out:
             tmp = Path(out.name)
-            for index, row in enumerate(record["stripes"]):
+            for index in range(first, stop):
+                row = record["stripes"][index]
                 shards, faults = scan_stripe(archive, index, row)
                 lost = len(faults)
                 require_recoverable(index, lost)
@@ -232,17 +242,23 @@ def restore(archive, output):
                 for i, block in enumerate(data):
                     if shards[i] is None and digest(block) != row[i]:
                         raise ValueError(f"stripe {index}: reconstructed shard digest mismatch")
-                chunk = b"".join(data)[:remaining]
+                start = index * STRIPE_BYTES
+                chunk = b"".join(data)[max(0, offset - start):end - start]
                 out.write(chunk)
-                whole.update(chunk)
-                remaining -= len(chunk)
-        if remaining or whole.hexdigest() != record["sha256"]:
+                checksum.update(chunk)
+                written += len(chunk)
+        hash_value = checksum.hexdigest()
+        if written != length or (complete and hash_value != record["sha256"]):
             raise ValueError("restored file digest or length mismatch")
         os.replace(tmp, output)
     finally:
         if tmp is not None:
             tmp.unlink(missing_ok=True)
-    return {"bytes": record["size"], "unusable_shards": erasures, "sha256": whole.hexdigest()}
+    report = {"bytes": written, "unusable_shards": erasures, "sha256": hash_value}
+    if interval is not None:
+        report.update(offset=offset, stripes_read=stop - first,
+                      verification="whole_file" if complete else "shard_digests")
+    return report
 
 
 def main():
@@ -254,6 +270,11 @@ def main():
     decode = commands.add_parser("restore")
     decode.add_argument("archive", type=Path)
     decode.add_argument("output", type=Path)
+    extract = commands.add_parser("restore-range", help="recover a byte range from only the stripes it overlaps")
+    extract.add_argument("archive", type=Path)
+    extract.add_argument("output", type=Path)
+    extract.add_argument("offset", type=int)
+    extract.add_argument("length", type=int)
     inspect = commands.add_parser("scrub", help="audit every shard against the manifest")
     inspect.add_argument("archive", type=Path)
     rebuild = commands.add_parser("rebuild-volume", help="build one replacement volume in a new directory")
@@ -266,6 +287,8 @@ def main():
             result = pack(args.source, args.archive)
         elif args.command == "restore":
             result = restore(args.archive, args.output)
+        elif args.command == "restore-range":
+            result = restore(args.archive, args.output, interval=(args.offset, args.length))
         elif args.command == "rebuild-volume":
             result = rebuild_volume(args.archive, args.slot, args.output)
         else:

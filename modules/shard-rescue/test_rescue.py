@@ -8,8 +8,8 @@ import sys
 import tempfile
 import unittest
 
-from shard_rescue import BLOCK, SLOTS, pack, part, rebuild_volume, restore
-from demo import demo
+from shard_rescue import BLOCK, SLOTS, STRIPE_BYTES, pack, part, rebuild_volume, restore
+from demo import demo, range_demo
 
 
 class RescueTest(unittest.TestCase):
@@ -152,6 +152,48 @@ class RescueTest(unittest.TestCase):
                 self.assertEqual(self.output.read_bytes(), content)
                 self.assertEqual(answer["sha256"], hashlib.sha256(content).hexdigest())
 
+    def test_range_demo_matches_recorded_result_after_whole_file_fails(self):
+        fixture = Path(__file__).parent / "examples" / "range-demo.json"
+        self.assertEqual(range_demo(self.root), json.loads(fixture.read_text(encoding="utf-8")))
+
+    def test_range_at_stripe_boundary_skips_unrelated_failure_and_excludes_padding(self):
+        content = self.prepare(3 * STRIPE_BYTES - 7)
+        for slot in ("d0", "p", "q"):
+            part(self.archive, 1, slot).unlink()
+        for offset, length in ((STRIPE_BYTES - 11, 11), (2 * STRIPE_BYTES, STRIPE_BYTES - 7), (len(content), 0)):
+            with self.subTest(offset=offset, length=length):
+                result = self.cli("restore-range", self.archive, self.output, str(offset), str(length))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                expected = content[offset:offset + length]
+                self.assertEqual(self.output.read_bytes(), expected)
+                self.assertEqual(json.loads(result.stdout), {
+                    "offset": offset, "bytes": length, "unusable_shards": 0,
+                    "stripes_read": int(bool(length)), "verification": "shard_digests",
+                    "sha256": hashlib.sha256(expected).hexdigest(),
+                })
+
+        self.output.write_bytes(b"previously verified")
+        before = set(self.root.iterdir())
+        for offset, length, diagnostic in ((STRIPE_BYTES - 1, 2, "stripe 1: 3 unusable"),
+                                           (len(content), 1, "outside"), (-1, 1, "outside"),
+                                           (0, -1, "outside")):
+            result = self.cli("restore-range", self.archive, self.output, str(offset), str(length))
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn(diagnostic, result.stderr)
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(self.output.read_bytes(), b"previously verified")
+            self.assertEqual(set(self.root.iterdir()), before)
+
+    def test_whole_interval_retains_whole_file_integrity_check(self):
+        self.prepare(3)
+        result = restore(self.archive, self.output, interval=(0, 3))
+        self.assertEqual(result["verification"], "whole_file")
+        path = self.archive / "manifest.json"
+        record = json.loads(path.read_text())
+        path.write_text(json.dumps(record | {"sha256": "0" * 64}))
+        with self.assertRaisesRegex(ValueError, "digest or length mismatch"):
+            restore(self.archive, self.output, interval=(0, 3))
+
     def test_manifest_and_final_digest_validation(self):
         self.prepare(321)
         path = self.archive / "manifest.json"
@@ -164,8 +206,8 @@ class RescueTest(unittest.TestCase):
                 self.assertFalse(self.output.exists())
 
     def cli(self, *args):
-        return subprocess.run([sys.executable, str(Path(__file__).with_name("shard_rescue.py")), *args],
-                              capture_output=True, text=True)
+        return subprocess.run([sys.executable, "-X", "utf8", str(Path(__file__).with_name("shard_rescue.py")), *args],
+                              capture_output=True, encoding="utf-8")
 
     def test_cli_pack_restore_and_archive_preservation(self):
         self.source.write_bytes(b"\x00\xff" * 100)

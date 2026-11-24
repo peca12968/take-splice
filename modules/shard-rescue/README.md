@@ -44,6 +44,17 @@ python shard_rescue.py restore recording-archive recovered.wav
 
 `restore` 以清單中的長度與雜湊辨識缺失、截短或內容損壞的分片。它逐條帶讀取資料，記憶體另需容納分片清單。若任一條帶有三片失效，指令會回報該條帶的位置與失效數量。還原過程寫入輸出目錄中的暫存檔，通過整檔 SHA-256 核對後才替換指定輸出。使用者需保留可信清單，才能核對還原資料。
 
+## 只還原指定的位元組區間
+
+```sh
+python shard_rescue.py restore-range recording-archive excerpt.pcm 49152 32768
+python demo.py --range
+```
+
+`restore-range` 的第三、第四個參數是從零起算的位元組偏移與長度。輸出只含要求的原始位元組，錄音片段要包含 WAV 標頭才能當 WAV 播放。工具只讀與區間相交的條帶，以可信清單核對各片及重建結果。範圍必須落在原始長度內，尾端填補的零不包含在內。零長度範圍可輸出空檔。
+
+示範從 192,044 B 的合成錄音取回 32,768 B，跨過兩條各壞兩片的條帶，並逐位元組比對原檔。最後一條帶有三片遺失，完整還原會失敗，指定區間仍可交付。報告包含 `stripes_read`、輸出片段的 `sha256` 和驗證範圍。一般區間採 `shard_digests`，選取整檔時另核對原始檔雜湊並回報 `whole_file`。若取用的條帶超過修復能力，既有輸出仍會保留。[產生範例的程式](demo.py) · [實際還原報告](examples/range-demo.json)
+
 ## 兩片資料同時遺失時如何求回
 
 P 是四片資料逐位元組的 XOR。Q 先在 GF(256) 中分別乘上 1、2、4、8，再做 XOR，約化多項式為 0x11D。扣除仍可讀的資料後，P 與 Q 各留下一條方程式。兩個遺失位置有不同的係數，因此可求得兩個未知位元組。六片中任選四片即可還原該條帶的原始資料。[實作](shard_rescue.py) · [P、Q 校驗的數學推導](https://www.kernel.org/pub/linux/kernel/people/hpa/raid6.pdf)

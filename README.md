@@ -55,6 +55,8 @@ python modules/cue-conform/deliver.py verify delivery.zip
 
 收件者可從發送方另取 `build` 回傳的 ZIP `sha256`，將 64 位十六進位字串傳給 `verify --sha256`，核對收到的完整版本。範例將兩次出現的「高音」改為「旁白」，ZIP 仍可開啟，但驗收會指出字幕的 SHA-256 不符。[CLI](modules/cue-conform/deliver.py) · [範例驗收資料](examples/delivery-demo.json) · [端對端測試](test_delivery.py)
 
+已歸檔的錄音可用 Shard Rescue 只取回指定的位元組區間。範例跨兩條受損的條帶還原 32,768 B，並與原檔逐位元組比對。第三條帶超過修復能力，完整還原仍會失敗。[片段還原與重跑](modules/shard-rescue/README.md#只還原指定的位元組區間)
+
 ## 格式與檔案處理
 
 - 接受小端 RIFF/WAVE 中的整數 PCM，支援單聲道、立體聲與 16、24 位元。所有片段需有相同取樣率、位元深度與聲道數。預設為硬剪接，可依音訊內容選擇在接點加上短淡出及淡入。
