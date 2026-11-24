@@ -48,7 +48,7 @@ python browser_check.py google-chrome
 
 先用 Channel Lag 的 `--channel 1 --compare-channel 2` 產生 JSON 報告。程式核對兩個聲道的定位狀態、取樣率與幀索引，使用帶正負號的幀差平移來源字幕，再按每一刀的幀區間裁切。無法判定唯一延遲時會終止匯出。這項對時適用於固定延遲。[量測工具](https://github.com/peca12968/take-splice/tree/main/modules/channel-lag)
 
-整合範例使用同一份 48 kHz 立體聲錄音，先量到聲道 2 晚 417 幀，再用 Take Splice 剪出兩段。原字幕 1.000–1.100 秒，在第一段落到 9–109 毫秒，在重複使用的片段落到 300–326 毫秒。交換聲道後得到 −417 幀，兩段分別顯示於 0–92 與 300–308 毫秒。可安裝 Channel Lag 的 requirements.txt 並以 Release 組態建置 Take Splice，再從本專案執行 `python alignment_demo.py ../channel-lag ../take-splice`。[跨專案驗證](alignment_demo.py)
+整合範例使用同一份 48 kHz 立體聲錄音，先量到聲道 2 晚 417 幀，再用 Take Splice 剪出兩段。原字幕 1.000–1.100 秒，在第一段落到 9–109 毫秒，在重複使用的片段落到 300–326 毫秒。交換聲道後得到 −417 幀，兩段分別顯示於 0–92 與 300–308 毫秒。從 `modules/cue-conform` 安裝 `../channel-lag/requirements.txt`，以 Release 組態建置 Take Splice，再執行 `python alignment_demo.py ../channel-lag ../..`。[整合驗證](alignment_demo.py)
 
 ### 裁切與毫秒刻度
 
