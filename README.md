@@ -43,3 +43,5 @@ dotnet run --project src -c Release -- listen/edit.tsv another-edit.wav
 **履歷用語**　以 C# 實作取樣幀精度的多來源 WAV 剪輯器，支援 16/24 位元 PCM，以固定大小緩衝區複製音訊，並用 Python 逐位元組驗證剪接邊界與聲道排列。
 
 本專案使用 AI 輔助開發。示範音訊由程式產生。
+
+[同庫模組與整合測試](modules/README.md)

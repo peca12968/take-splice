@@ -1,0 +1,9 @@
+{
+  "format": {"channels": 2, "sample_rate": 48000, "bits": 16, "frame_bytes": 4},
+  "frames": 60001,
+  "clips": [
+    {"source": "first.wav", "start": 24000, "end": 48000, "output_start": 0},
+    {"source": "second.wav", "start": 99, "end": 24100, "output_start": 24000},
+    {"source": "first.wav", "start": 24000, "end": 36000, "output_start": 48001}
+  ]
+}

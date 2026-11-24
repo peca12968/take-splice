@@ -1,0 +1,77 @@
+name: Verify take-splice system
+'on':
+- push
+- pull_request
+permissions:
+  contents: read
+jobs:
+  render:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+        - ubuntu-latest
+        - windows-latest
+    steps:
+    - uses: actions/checkout@v7
+    - uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: 10.0.x
+    - uses: actions/setup-python@v7
+      with:
+        python-version: '3.13'
+    - run: dotnet build src -c Release
+    - run: python -m unittest -v
+    - run: python demo.py
+  cue-conform-captions:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+        - ubuntu-latest
+        - windows-latest
+    steps:
+    - uses: actions/checkout@v7
+    - uses: actions/setup-python@v7
+      with:
+        python-version: '3.12'
+    - run: python -m unittest -v
+    - if: runner.os == 'Linux'
+      run: python browser_check.py google-chrome
+    - uses: actions/checkout@v7
+      with:
+        ref: 9774ce1ed2a2fd7db3d9efa07931b9fb2f6911f1
+        path: modules/cue-conform/upstream
+    - uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: 10.0.x
+    - run: dotnet build upstream/src -c Release
+    - run: python integration.py upstream
+    - uses: actions/checkout@v7
+      with:
+        ref: 532753f6c7a906e4792ed29d2bc8f61e9c629e47
+        path: modules/cue-conform/detector
+    - run: python -m pip install -r detector/requirements.txt
+    - run: python alignment_demo.py detector upstream
+    defaults:
+      run:
+        working-directory: modules/cue-conform
+  channel-lag-verify:
+    strategy:
+      matrix:
+        os:
+        - ubuntu-latest
+        - windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v7
+    - uses: actions/setup-python@v7
+      with:
+        python-version: '3.12'
+        cache: pip
+        cache-dependency-path: modules/channel-lag/requirements.txt
+    - run: python -m pip install -r requirements.txt
+    - run: python -m unittest -v
+    defaults:
+      run:
+        working-directory: modules/channel-lag
