@@ -32,9 +32,19 @@ dotnet run --project src -c Release -- listen/edit.tsv another-edit.wav
 
 成功會回傳結束碼 0，並在標準輸出寫入 JSON，列出格式、幀數、來源區間與輸出起始幀。命令需要一個尚未存在的輸出檔名。若有來源缺失、格式不一致或區間越界，會以結束碼 2 回報原因。
 
+### 降低接點的波形突變
+
+```sh
+dotnet run --project src -c Release -- listen/edit.tsv smooth-edit.wav --edge-fade-frames 240
+```
+
+在 48 kHz 音訊中，240 幀相當於 5 毫秒。每個內部接點前線性淡出、後線性淡入。兩側增益若在短片段中重疊，就採較小值。各聲道使用相同增益，第一段的起頭與最後一段的收尾維持原樣。省略參數或填 0 時沿用原本的硬剪接。
+
+這個模式保留總幀數、片段偏移及報表欄位。整合測試用新音訊重新輸出 WebVTT，核對六句字幕及時碼與原範例一致，並從實際 WAV 讀取兩個接點前後的取樣值。[作品站共用的接點數值](examples/edge-fade-demo.json) · [實際 WAV 與字幕驗證](test_splice.py)
+
 ## 格式與檔案處理
 
-- 接受小端 RIFF/WAVE 中的整數 PCM，支援單聲道、立體聲與 16、24 位元。所有片段需有相同取樣率、位元深度與聲道數。輸出採硬剪接；接點的波形若不連續，播放時可能聽到喀聲。
+- 接受小端 RIFF/WAVE 中的整數 PCM，支援單聲道、立體聲與 16、24 位元。所有片段需有相同取樣率、位元深度與聲道數。預設為硬剪接，可依音訊內容選擇在接點加上短淡出及淡入。
 - 讀取 RIFF chunk 的宣告長度與偶數位元組對齊，容許額外中繼資料及不同的 chunk 順序。逐一檢查資料邊界、取樣框大小與位元組率，輸出重建 `fmt` 和 `data` 兩個 chunk。RF64、浮點 PCM、壓縮音訊與多聲道配置超出這個版本的支援範圍。[RIFF 格式](https://learn.microsoft.com/en-us/windows/win32/xaudio2/resource-interchange-file-format--riff-) · [WAV 解析與標頭](src/Wave.cs)
 - 開始複製前驗證整份清單和 RIFF 可表示的輸出大小。複製使用 64 KiB 緩衝區，維持每個不同來源的檔案連線，工作期間來源應保持穩定。完成後將同目錄暫存檔移到輸出名稱。測試會讓兩個程序競爭相同名稱，確認只成功發布一次。[剪接實作](src/Program.cs)
 

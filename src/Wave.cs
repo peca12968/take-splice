@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Text;
 
 internal sealed record Pcm(ushort Channels, uint SampleRate, ushort Bits)
@@ -7,6 +8,28 @@ internal sealed record Pcm(ushort Channels, uint SampleRate, ushort Bits)
 
 internal sealed record Wave(Pcm Format, long DataOffset, long Frames)
 {
+    public static void FadeEdges(Span<byte> pcm, Pcm format, long position, long length,
+        uint fadeFrames, bool fadeIn, bool fadeOut)
+    {
+        int width = format.Bits / 8;
+        for (int frame = 0; frame < pcm.Length; frame += format.FrameBytes, position++)
+        {
+            long distance = Math.Min(fadeIn ? position : fadeFrames,
+                fadeOut ? length - position - 1 : fadeFrames);
+            if (distance >= fadeFrames) continue;
+            for (int channel = 0; channel < format.Channels; channel++)
+            {
+                Span<byte> bytes = pcm.Slice(frame + channel * width, width);
+                int sample = width == 2 ? BinaryPrimitives.ReadInt16LittleEndian(bytes)
+                    : bytes[0] | (bytes[1] << 8) | ((sbyte)bytes[2] << 16);
+                int scaled = (int)((long)sample * distance / fadeFrames);
+                bytes[0] = (byte)scaled;
+                bytes[1] = (byte)(scaled >> 8);
+                if (width == 3) bytes[2] = (byte)(scaled >> 16);
+            }
+        }
+    }
+
     public static Wave Read(FileStream stream)
     {
         using var reader = new BinaryReader(stream, Encoding.ASCII, leaveOpen: true);

@@ -9,14 +9,16 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
-        if (args.Length != 2)
+        uint fadeFrames = 0;
+        if (args.Length != 2 && (args.Length != 4 || args[2] != "--edge-fade-frames" ||
+            !uint.TryParse(args[3], NumberStyles.None, CultureInfo.InvariantCulture, out fadeFrames)))
         {
-            Console.Error.WriteLine("usage: take-splice PLAN.tsv NEW-OUTPUT.wav");
+            Console.Error.WriteLine("usage: take-splice PLAN.tsv NEW-OUTPUT.wav [--edge-fade-frames N]");
             return 2;
         }
         try
         {
-            Render(Path.GetFullPath(args[0]), Path.GetFullPath(args[1]));
+            Render(Path.GetFullPath(args[0]), Path.GetFullPath(args[1]), fadeFrames);
             return 0;
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException
@@ -27,7 +29,7 @@ internal static class Program
         }
     }
 
-    private static void Render(string plan, string target)
+    private static void Render(string plan, string target, uint fadeFrames)
     {
         if (File.Exists(target)) throw new IOException("output already exists");
         string directory = Path.GetDirectoryName(plan)!;
@@ -71,17 +73,26 @@ internal static class Program
                 {
                     Wave.WriteHeader(output, format, total);
                     byte[] buffer = new byte[65536];
-                    foreach (var clip in clips)
+                    int framesPerBlock = buffer.Length / format.FrameBytes;
+                    for (int index = 0; index < clips.Count; index++)
                     {
+                        var clip = clips[index];
                         var take = takes[Path.GetFullPath(clip.Source, directory)];
                         take.Stream.Position = take.Wave.DataOffset + clip.Start * format.FrameBytes;
-                        long remaining = (clip.End - clip.Start) * format.FrameBytes;
-                        while (remaining > 0)
+                        long length = clip.End - clip.Start;
+                        bool fadeIn = index > 0;
+                        bool fadeOut = index < clips.Count - 1;
+                        long position = 0;
+                        while (position < length)
                         {
-                            int count = (int)Math.Min(buffer.Length, remaining);
-                            take.Stream.ReadExactly(buffer, 0, count);
-                            output.Write(buffer, 0, count);
-                            remaining -= count;
+                            int frames = (int)Math.Min(framesPerBlock, length - position);
+                            Span<byte> block = buffer.AsSpan(0, frames * format.FrameBytes);
+                            take.Stream.ReadExactly(block);
+                            if (fadeFrames > 0 && ((fadeIn && position < fadeFrames) ||
+                                (fadeOut && length - position - frames < fadeFrames)))
+                                Wave.FadeEdges(block, format, position, length, fadeFrames, fadeIn, fadeOut);
+                            output.Write(block);
+                            position += frames;
                         }
                     }
                     if (output.Position % 2 == 1) output.WriteByte(0);
